@@ -1081,8 +1081,8 @@ void GameInput::_bind_methods() {
 
 // Holds an in-flight reference for the duration of a callback so shutdown()
 // can wait until the callback is out of the singleton's data before releasing
-// IGameInput or freeing the singleton. v3's UnregisterCallback does NOT fence
-// pending callbacks the way v1's timeout parameter did.
+// IGameInput or freeing the singleton. A successful UnregisterCallback already
+// makes that safe; the count keeps it safe when UnregisterCallback fails.
 bool GameInput::_enter_callback() {
     m_callbacks_in_flight.fetch_add(1, std::memory_order_acquire);
     if (!m_accepting_callbacks.load(std::memory_order_acquire) ||
@@ -1105,11 +1105,14 @@ void GameInput::_wait_for_callbacks() {
     }
 }
 
-void GameInput::_unregister_callback(GameInputCallbackToken &token, const char * /*what*/) {
+void GameInput::_unregister_callback(GameInputCallbackToken &token, const char *what) {
     if (!token) return;
+    // UnregisterCallback alone: calling StopCallback first makes it fail
+    // intermittently on the GameInput 3.3 runtime, and a failed unregister
+    // does not fence the callback.
     if (m_game_input && !m_game_input->UnregisterCallback(token)) {
-        UtilityFunctions::push_warning(
-            "GameInput: UnregisterCallback() failed; late callbacks will be ignored.");
+        UtilityFunctions::push_warning("GameInput: UnregisterCallback() failed for the ", what,
+                                       " callback; late callbacks will be ignored.");
     }
     token = 0;
 }
@@ -1808,8 +1811,8 @@ void GameInput::shutdown() {
     m_shutting_down.store(true, std::memory_order_release);
 
     // 2. Unregister. GameInput v3 dropped the timeout parameter that v1
-    //    accepted here and does not fence in-flight callbacks; the fence is
-    //    enforced below by m_callbacks_in_flight.
+    //    accepted here; m_callbacks_in_flight below also covers an unregister
+    //    that fails.
     _unregister_callback(m_reading_callback_token, "reading");
     _unregister_callback(m_system_button_callback_token, "system button");
     _unregister_callback(m_keyboard_layout_callback_token, "keyboard layout");

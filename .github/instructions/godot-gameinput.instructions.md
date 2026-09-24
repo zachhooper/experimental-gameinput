@@ -33,6 +33,9 @@ applyTo: "addons/godot_gameinput/**, addons/godot_gameinput_csharp/**, tests/god
   `_wait_for_callbacks()` drains `m_callbacks_in_flight` before releasing
   anything. A new callback that skips the fence is a use-after-free at
   shutdown.
+- Unregister with `UnregisterCallback` only. Calling `StopCallback` first
+  makes `UnregisterCallback` fail intermittently on the GameInput 3.3
+  runtime, and a failed unregister does not fence the callback.
 - The main thread drains the pending queue inside `GameInput::poll()`. Signals
   are emitted from there — no `call_deferred` plumbing needed. Device events
   and event readings share a sequence number; keep them merged in that order.
