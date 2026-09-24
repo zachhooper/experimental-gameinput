@@ -15,7 +15,11 @@ public static class GameInput
     private static GodotObject _singleton;
     private static bool _signalsConnected;
 
-    /// <summary>Device-kind bit flags, matching native <c>GameInput.DeviceKind</c>.</summary>
+    /// <summary>
+    /// Device-kind bit flags, matching native <c>GameInput.DeviceKind</c>.
+    /// <see cref="All"/> is gamepads, keyboards and mice (the v1 set);
+    /// <see cref="Any"/> is every kind.
+    /// </summary>
     [Flags]
     public enum DeviceKind
     {
@@ -24,6 +28,28 @@ public static class GameInput
         Keyboard = 2,
         Mouse = 4,
         All = 7,
+        ArcadeStick = 8,
+        FlightStick = 16,
+        RacingWheel = 32,
+        Sensors = 64,
+        Controller = 128,
+        Any = 255,
+    }
+
+    /// <summary>
+    /// Focus-policy flags, matching native <c>GameInput.FocusPolicy</c> and
+    /// <c>GameInputFocusPolicy</c>. GameInput applies them on Windows only.
+    /// </summary>
+    [Flags]
+    public enum FocusPolicy
+    {
+        Default = 0,
+        ExclusiveForegroundInput = 2,
+        ExclusiveForegroundGuideButton = 8,
+        ExclusiveForegroundShareButton = 32,
+        EnableBackgroundInput = 64,
+        EnableBackgroundGuideButton = 128,
+        EnableBackgroundShareButton = 256,
     }
 
     /// <summary>True when the <c>godot_gameinput</c> GDExtension is loaded.</summary>
@@ -152,8 +178,82 @@ public static class GameInput
             ? null
             : GameInputReading.From(Singleton.Call("get_current_reading", device.Raw).AsGodotObject());
 
+    /// <summary>Connected gamepads, keyboards and mice; see <see cref="GetConnectedDeviceCount"/> for other kinds.</summary>
     public static int ConnectedDeviceCount =>
         Singleton == null ? 0 : Singleton.Call("get_connected_device_count").AsInt32();
+
+    /// <summary>Connected devices whose kind mask intersects <paramref name="kindMask"/>.</summary>
+    public static int GetConnectedDeviceCount(DeviceKind kindMask = DeviceKind.All) =>
+        Singleton == null ? 0 : Singleton.Call("get_connected_device_count", (int)kindMask).AsInt32();
+
+    /// <summary>The connected device with this id, of any kind, or null.</summary>
+    public static GameInputDevice GetDeviceById(long deviceId) =>
+        Singleton == null
+            ? null
+            : GameInputDevice.From(Singleton.Call("get_device_by_id", deviceId).AsGodotObject());
+
+    /// <summary>Current GameInput clock time in microseconds; 0 when not initialized.</summary>
+    public static long CurrentTimestamp =>
+        Singleton == null ? 0 : Singleton.Call("get_current_timestamp").AsInt64();
+
+    // --- Event-driven readings ---
+
+    /// <summary>
+    /// Delivers every reading of these kinds through <see cref="ReadingReceived"/>
+    /// and <see cref="GetBufferedReadings"/>. <see cref="DeviceKind.Unknown"/>
+    /// (0) turns reading callbacks off. Returns false only when GameInput refused
+    /// the reading callback.
+    /// </summary>
+    public static bool SetReadingCallbackKinds(DeviceKind kindMask) =>
+        Require().Call("set_reading_callback_kinds", (int)kindMask).AsBool();
+
+    public static DeviceKind ReadingCallbackKinds =>
+        Singleton == null ? DeviceKind.Unknown : (DeviceKind)Singleton.Call("get_reading_callback_kinds").AsInt32();
+
+    /// <summary>Readings the callback delivered for <paramref name="device"/> during the last <see cref="Poll"/>, oldest first.</summary>
+    public static IReadOnlyList<GameInputReading> GetBufferedReadings(GameInputDevice device)
+    {
+        var result = new List<GameInputReading>();
+        if (Singleton == null || device == null)
+        {
+            return result;
+        }
+
+        foreach (Variant reading in Singleton.Call("get_buffered_readings", device.Raw).AsGodotArray())
+        {
+            GameInputReading wrapped = GameInputReading.From(reading.AsGodotObject());
+            if (wrapped != null)
+            {
+                result.Add(wrapped);
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>Readings dropped since <see cref="Initialize"/> because the reading ring was full.</summary>
+    public static long DroppedReadingCount =>
+        Singleton == null ? 0 : Singleton.Call("get_dropped_reading_count").AsInt64();
+
+    // --- Focus policy ---
+
+    public static void SetFocusPolicy(FocusPolicy policy) => Require().Call("set_focus_policy", (int)policy);
+
+    public static FocusPolicy GetFocusPolicy() =>
+        Singleton == null ? FocusPolicy.Default : (FocusPolicy)Singleton.Call("get_focus_policy").AsInt32();
+
+    // --- Aggregate devices ---
+
+    /// <summary>
+    /// Asks GameInput for a virtual device combining every connected device of
+    /// one kind. Returns its app-local id (64 hex characters), or an empty string
+    /// on failure. The aggregate arrives through <see cref="DeviceConnected"/>.
+    /// </summary>
+    public static string CreateAggregateDevice(DeviceKind kind) =>
+        Singleton == null ? string.Empty : Singleton.Call("create_aggregate_device", (int)kind).AsString();
+
+    public static bool DisableAggregateDevice(string appLocalId) =>
+        Singleton != null && Singleton.Call("disable_aggregate_device", appLocalId).AsBool();
 
     // --- Haptics ---
     public static bool SetVibration(GameInputDevice device, float lowFreq, float highFreq,
@@ -179,6 +279,20 @@ public static class GameInput
     public static event Action<GameInputDevice> DeviceConnected;
     public static event Action<long> DeviceDisconnected;
 
+    /// <summary>(device, status, previousStatus, timestamp) when a connected device's status flags change.</summary>
+    public static event Action<GameInputDevice, GameInputDevice.DeviceStatus, GameInputDevice.DeviceStatus, long>
+        DeviceStatusChanged;
+
+    /// <summary>(device, reading) for each event-driven reading; see <see cref="SetReadingCallbackKinds"/>.</summary>
+    public static event Action<GameInputDevice, GameInputReading> ReadingReceived;
+
+    /// <summary>(device, buttons, previousButtons, timestamp) when Guide or Share is pressed or released.</summary>
+    public static event Action<GameInputDevice, GameInputDevice.SystemButton, GameInputDevice.SystemButton, long>
+        SystemButtonsChanged;
+
+    /// <summary>(device, layout, previousLayout, timestamp) when a keyboard's layout changes.</summary>
+    public static event Action<GameInputDevice, long, long, long> KeyboardLayoutChanged;
+
     private static void EnsureSignalsConnected()
     {
         if (_signalsConnected || _singleton == null)
@@ -191,5 +305,19 @@ public static class GameInput
             Callable.From((GodotObject device) => DeviceConnected?.Invoke(GameInputDevice.From(device))));
         _singleton.Connect("device_disconnected",
             Callable.From((long deviceId) => DeviceDisconnected?.Invoke(deviceId)));
+        _singleton.Connect("device_status_changed",
+            Callable.From((GodotObject device, long status, long previous, long timestamp) =>
+                DeviceStatusChanged?.Invoke(GameInputDevice.From(device), (GameInputDevice.DeviceStatus)status,
+                    (GameInputDevice.DeviceStatus)previous, timestamp)));
+        _singleton.Connect("reading_received",
+            Callable.From((GodotObject device, GodotObject reading) =>
+                ReadingReceived?.Invoke(GameInputDevice.From(device), GameInputReading.From(reading))));
+        _singleton.Connect("system_buttons_changed",
+            Callable.From((GodotObject device, long buttons, long previous, long timestamp) =>
+                SystemButtonsChanged?.Invoke(GameInputDevice.From(device), (GameInputDevice.SystemButton)buttons,
+                    (GameInputDevice.SystemButton)previous, timestamp)));
+        _singleton.Connect("keyboard_layout_changed",
+            Callable.From((GodotObject device, long layout, long previous, long timestamp) =>
+                KeyboardLayoutChanged?.Invoke(GameInputDevice.From(device), layout, previous, timestamp)));
     }
 }

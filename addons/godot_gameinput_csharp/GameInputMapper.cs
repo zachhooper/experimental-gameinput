@@ -32,6 +32,9 @@ public sealed class GameInputMapper : GameInputObject
         Gamepad = 1,
         Keyboard = 2,
         Mouse = 4,
+        ArcadeStick = 8,
+        FlightStick = 16,
+        RacingWheel = 32,
     }
 
     public GameInputActionMap ActionMap
