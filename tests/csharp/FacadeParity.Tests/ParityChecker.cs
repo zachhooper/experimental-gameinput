@@ -66,6 +66,58 @@ internal static class ParityChecker
         return missing;
     }
 
+    /// <summary>
+    /// Returns the native constants in the doc XML whose managed enum member is
+    /// missing or has a different value. A constant of native enum <c>E</c> must
+    /// be a member of the nested C# enum <c>E</c> on <paramref name="csharpType"/>,
+    /// named without the enum's shared prefix (<c>SRC_BTN_A</c> is
+    /// <c>Source.BtnA</c>): the longest managed name that ends the native name
+    /// is the match.
+    /// </summary>
+    public static List<string> FindConstantMismatches(string xmlPath, Type csharpType)
+    {
+        var problems = new List<string>();
+        XElement constants = XDocument.Load(xmlPath).Root.Element("constants");
+        if (constants == null)
+        {
+            return problems;
+        }
+
+        foreach (IGrouping<string, XElement> group in constants.Elements("constant")
+                     .GroupBy(c => (string)c.Attribute("enum") ?? string.Empty))
+        {
+            Type enumType = group.Key.Length == 0 ? null : csharpType.GetNestedType(group.Key, BindingFlags.Public);
+            if (enumType == null || !enumType.IsEnum)
+            {
+                problems.Add($"no nested enum '{group.Key}' for {group.Count()} constant(s)");
+                continue;
+            }
+
+            Dictionary<string, long> members = Enum.GetNames(enumType)
+                .ToDictionary(Normalize, n => Convert.ToInt64(Enum.Parse(enumType, n)));
+            foreach (XElement constant in group)
+            {
+                string nativeName = (string)constant.Attribute("name");
+                long nativeValue = long.Parse((string)constant.Attribute("value"));
+                string norm = Normalize(nativeName);
+                string match = members.Keys
+                    .Where(m => norm.EndsWith(m, StringComparison.Ordinal))
+                    .OrderByDescending(m => m.Length)
+                    .FirstOrDefault();
+                if (match == null)
+                {
+                    problems.Add($"{group.Key}.{nativeName} has no managed member");
+                }
+                else if (members[match] != nativeValue)
+                {
+                    problems.Add($"{group.Key}.{nativeName} is {nativeValue} natively but {members[match]} in C#");
+                }
+            }
+        }
+
+        return problems;
+    }
+
     private static bool IsCovered(string nativeName, HashSet<string> managed)
     {
         string norm = Normalize(nativeName);
