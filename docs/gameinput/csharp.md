@@ -68,7 +68,8 @@ The facade follows the GDScript API with C# names:
   `ButtonToSource()` and `AxisToSource()`, which are static natively but
   shipped as instance methods in the first facade; they stay instance methods
   so existing callers keep compiling, and they return the same values from
-  any device.
+  any device. Code that has no device yet can name the `Source` value
+  directly, for example `GameInputDevice.Source.BtnA`.
 * Signals are static events with typed arguments (see [Events](#events)).
 
 ## Devices, readings, and haptics
