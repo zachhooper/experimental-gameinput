@@ -52,7 +52,8 @@ If your project drifts from a tutorial, open the matching sample scene and compa
 - [`sample/tutorial_gdk/`](../../sample/tutorial_gdk/README.md) — GDK-only track (`g01` → `g04`).
 - [`sample/tutorial_playfab/`](../../sample/tutorial_playfab/README.md) — PlayFab-only track (`p01` → `p05`).
 - [`sample/tutorial_integrated/`](../../sample/tutorial_integrated/README.md) — integrated XBOX + PlayFab track (`i01` → `i02`).
-- [`sample/tutorial_gameinput/`](../../sample/tutorial_gameinput/README.md) — standalone GameInput sample.
+- [`sample/tutorial_gameinput/`](../../sample/tutorial_gameinput/README.md) — standalone GameInput sample, device inspector, and the addon's integration self-test.
+- [`sample/tutorial_gameinput_csharp/`](../../sample/tutorial_gameinput_csharp/README.md) — the GameInput sample in C#, with its own self-test.
 
 For a complete game rather than a per-surface reference, see
 [`sample/tutorial_netrumble/`](../../sample/tutorial_netrumble/README.md), which documents

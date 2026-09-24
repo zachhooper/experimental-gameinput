@@ -116,7 +116,7 @@
 			<return type="String" />
 			<param index="0" name="source" type="int" />
 			<description>
-				Returns the label GameInput reports for the button behind [param source], an [enum Source] value, as a snake_case name such as [code]"xbox_a"[/code], [code]"letter_a"[/code], [code]"cross"[/code] or [code]"none"[/code]. Use it to pick the button prompt to show. Returns [code]"unknown"[/code] when GameInput reports an unknown label, and an empty [String] when the device has no label field for that source (axes, gamepad buttons other than face, menu, view, D-pad, shoulder, thumbstick, C and Z, or a source for another device kind) or has been disconnected.
+				Returns the label GameInput reports for the button behind [param source], an [enum Source] value, as a snake_case name such as [code]"xbox_a"[/code], [code]"letter_a"[/code], [code]"icon_cross"[/code] or [code]"none"[/code]. Use it to pick the button prompt to show. Returns [code]"unknown"[/code] when GameInput reports an unknown label, and an empty [String] when the device has no label field for that source (axes, gamepad buttons other than face, menu, view, D-pad, shoulder, thumbstick, C and Z, or a source for another device kind) or has been disconnected.
 			</description>
 		</method>
 		<method name="get_haptic_info" qualifiers="const">

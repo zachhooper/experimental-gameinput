@@ -106,7 +106,7 @@
 			<param index="0" name="kind_mask" type="int" />
 			<description>
 				Selects the device kinds, as [enum DeviceKind] flags, whose every reading is delivered through [signal reading_received] and [method get_buffered_readings] instead of only the latest state per [method poll]. [code]0[/code], the default, turns reading callbacks off. Bits outside [constant DEVICE_ANY] are ignored with a warning.
-				A GameInput worker thread queues the readings in a ring of 1024 entries shared by every device. If the game polls too rarely to keep up, the oldest readings are dropped and counted by [method get_dropped_reading_count], and the next reading of each device reports [method GameInputReading.has_gap_before].
+				A GameInput worker thread queues the readings in a ring of 512 entries shared by every device. If the game polls too rarely to keep up, the oldest readings are dropped and counted by [method get_dropped_reading_count], and the next reading of each device reports [method GameInputReading.has_gap_before].
 				Called before [method initialize], the mask is stored, applied when the runtime starts, and takes precedence over the Project Setting [code]game_input/runtime/reading_callback_kinds[/code]. Returns [code]false[/code] only when [code]RegisterReadingCallback()[/code] failed, in which case [signal reading_received] will not fire.
 			</description>
 		</method>

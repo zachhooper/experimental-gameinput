@@ -20,6 +20,9 @@ gamepad into Godot's standard `InputMap`. By the end:
   hood without your character controller knowing.
 - You react to hot-plug via the
   `GameInput.device_connected` / `device_disconnected` signals.
+- The pad gives a short rumble when the player jumps.
+- One command checks the whole bridge, headless, with no
+  controller plugged in.
 
 When it works, a Sprite that uses `move_left` / `move_right` /
 `jump` reacts to gamepad input even when the player's XBOX
@@ -56,9 +59,9 @@ controller would otherwise be routed through GameInput-only paths
 ## Relevant addon surfaces
 
 - [`GameInput`](../../addons/godot_gameinput/doc_classes/GameInput.xml)
-  — `is_initialized`, `poll`, `get_devices`,
-  `get_connected_device_count`, signals `device_connected` /
-  `device_disconnected`.
+  — `is_initialized`, `poll`, `get_devices`, `get_primary_device`,
+  `get_device_by_id`, `get_connected_device_count`, signals
+  `device_connected` / `device_disconnected`.
 - [`GameInputActionMap`](../../addons/godot_gameinput/doc_classes/GameInputActionMap.xml)
   — the typed `Resource` you author in the inspector (or in code).
 - [`GameInputBinding`](../../addons/godot_gameinput/doc_classes/GameInputBinding.xml)
@@ -67,8 +70,8 @@ controller would otherwise be routed through GameInput-only paths
   — the `Node` that polls and feeds `Input.action_press` /
   `Input.action_release` every frame.
 - [`GameInputDevice`](../../addons/godot_gameinput/doc_classes/GameInputDevice.xml)
-  — wrapper exposing `get_device_id`, `get_display_name`, and the
-  `SRC_*` constants.
+  — wrapper exposing `get_device_id`, `get_display_name`,
+  `supports_vibration`, `start_vibration`, and the `SRC_*` constants.
 
 > **GameInput vs. Godot's built-in joypad backend.** Godot has its
 > own joypad backend that delivers `InputEventJoypadButton` and
@@ -279,8 +282,57 @@ func _ready() -> void:
     if not GameInput.is_initialized():
         push_warning("[Pad] GameInput runtime not available — gamepad input disabled.")
         return
-    print("[Pad] %d gamepad(s) currently connected" % GameInput.get_connected_device_count())
+    print("[Pad] %d gamepad(s) currently connected"
+            % GameInput.get_connected_device_count(GameInput.DEVICE_GAMEPAD))
 ```
+
+Pass `GameInput.DEVICE_GAMEPAD`: without an argument
+`get_connected_device_count()` counts gamepads, keyboards and mice
+together, so a desktop with no controller still reports devices.
+
+## Step 7 — Rumble on jump
+
+The mapper reads the gamepad; vibration goes the other way, through
+the same `GameInputDevice` wrapper. Give the player a short thump
+when the jump starts:
+
+```gdscript
+extends CharacterBody2D
+
+const SPEED := 200.0
+const JUMP_VELOCITY := -400.0
+const JUMP_RUMBLE_WEAK := 0.2
+const JUMP_RUMBLE_STRONG := 0.4
+const JUMP_RUMBLE_SEC := 0.12
+
+func _physics_process(delta: float) -> void:
+    var direction := Input.get_action_strength("move_right") - Input.get_action_strength("move_left")
+    velocity.x = direction * SPEED
+
+    if Input.is_action_just_pressed("jump") and is_on_floor():
+        velocity.y = JUMP_VELOCITY
+        _rumble_pad()
+
+    move_and_slide()
+
+func _rumble_pad() -> void:
+    if not GameInput.is_initialized():
+        return
+    var pad: GameInputDevice = GameInput.get_primary_device()
+    if pad and pad.supports_vibration():
+        pad.start_vibration(JUMP_RUMBLE_WEAK, JUMP_RUMBLE_STRONG, JUMP_RUMBLE_SEC)
+```
+
+`start_vibration(weak, strong, duration)` has the same shape as
+Godot's `Input.start_joy_vibration()`: the weak (high-frequency)
+motor first, then the strong (low-frequency) one. With a duration,
+`GameInput.poll()` stops the motors when it elapses, so there is no
+timer to manage. Two more optional arguments drive the impulse
+triggers on pads that have them.
+
+With per-player mappers (Step 5), rumble the pad that player is
+using instead of the primary one:
+`GameInput.get_device_by_id(mapper.target_device_id)`.
 
 ## Verify
 
@@ -291,9 +343,10 @@ With one gamepad connected, running the scene prints:
 ```
 
 Pressing the A button fires `ui_accept` (focused UI elements
-react) **and** `jump` (the character jumps). Tilting the left stick
-fires `move_left` / `move_right` with smooth analog strength
-visible in `Input.get_action_strength`.
+react) **and** `jump` (the character jumps, and the pad gives a
+short rumble). Tilting the left stick fires `move_left` /
+`move_right` with smooth analog strength visible in
+`Input.get_action_strength`.
 
 Common failures:
 
@@ -303,6 +356,30 @@ Common failures:
 | Action fires twice (e.g., your jump triggers a double-jump) | A native joypad event for the same button is bound in the Input Map AND the mapper is also firing. | Either remove the native joypad event for that action, or accept the mapper's automatic skip (it should detect this case — if it doesn't, file a bug). |
 | Analog stick "snaps" to full strength at a small tilt | `deadzone` on the axis binding is too low. | Raise `deadzone` to `0.2` or higher (the default). |
 | `[Pad] GameInput runtime not available` on a Microsoft GDK build | `GameInputCreate()` failed at runtime. | Check that the Microsoft GDK is installed on the target machine and the addon `bin/` ships with the build. |
+| No rumble on jump | The pad has no rumble motors (`supports_vibration()` is `false`), or a different pad is primary. | Check the pad in the sample's Inspector panel; with several pads, rumble the mapper's `target_device_id`. |
+
+## Check it automatically
+
+The sample below doubles as an integration check. From the
+repository root:
+
+```powershell
+pwsh -NoProfile -File .\tools\run_gameinput_selftest.ps1
+```
+
+The runner imports the sample if needed, runs it headless with
+`-- --gameinput-selftest`, and prints one line per check. The checks
+cover the addon's API surface and the real GameInput runtime, then
+swap in the addon's debug-only mock backend and drive this
+tutorial's wiring with a scripted pad: the hot-plug log and gamepad
+count update, A presses `jump` and `ui_accept`, the stick drives
+`move_left` / `move_right`, the player jumps and the pad receives
+the Step 7 rumble, and unplugging the pad mid-press releases the
+held action. It
+writes a JSON report and exits with `0` when everything passed. Add
+`-VirtualPad` to plug in a virtual Xbox 360 pad and check the rumble
+end to end. The [sample README](../../sample/tutorial_gameinput/README.md)
+lists every check and option.
 
 ## Reference implementation
 
@@ -320,14 +397,21 @@ The end-state lives in the standalone GameInput sample at
 > path) and adds the `GameInputMapper` at scene `_ready` instead of
 > via autoload. Same wiring, fewer files — and it adds visible
 > debug UI (device list, hot-plug log, live action strengths,
-> jumping player) so you can see the bridge react.
+> jumping player) so you can see the bridge react, plus a
+> **Device inspector** panel that shows every GameInput device and
+> its live reading and can rumble it.
+
+A C# version lives in
+[`sample/tutorial_gameinput_csharp/`](../../sample/tutorial_gameinput_csharp/README.md).
 
 ## What's next
 
-- **Add rumble.** `GameInput.set_vibration(device, low, high, lt, rt)`
-  takes the same `GameInputDevice` wrappers the bridge uses. The
-  [GameInput addon doc](../gameinput/plugin.md) covers the rumble
-  patterns the addon supports.
+- **Go beyond gamepads.** `get_devices()` takes `DEVICE_*` flags for
+  keyboards, mice, arcade sticks, flight sticks, racing wheels and
+  motion sensors, and bindings accept their `SRC_*` sources. The
+  [GameInput addon doc](../gameinput/plugin.md) covers every input
+  kind, force feedback, and event-driven readings that catch taps
+  shorter than a frame.
 - **Per-player binding for split-screen.** The hot-plug handler in
   Step 5 is the starting point — extend it to pin specific device
   ids to per-player `GameInputMapper` nodes.

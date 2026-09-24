@@ -1,6 +1,6 @@
 ---
 description: Godot GameInput addon architecture, threading model, action-bridge conventions, and sample workflow
-applyTo: "addons/godot_gameinput/**, tests/godot/gameinput/**, sample/tutorial_gameinput/**, docs/gameinput/**, spec/gdext-gameinput.md"
+applyTo: "addons/godot_gameinput/**, addons/godot_gameinput_csharp/**, tests/godot/gameinput/**, sample/tutorial_gameinput/**, sample/tutorial_gameinput_csharp/**, docs/gameinput/**, docs/tutorials/gameinput-action-bridge.md, spec/gdext-gameinput.md, tools/run_gameinput_selftest.ps1, tools/virtual_gamepad/**"
 ---
 
 # Godot GameInput Addon Instructions
@@ -10,21 +10,32 @@ applyTo: "addons/godot_gameinput/**, tests/godot/gameinput/**, sample/tutorial_g
 - `GameInput` is the only engine singleton registered by this addon. Access
   via `Engine.get_singleton("GameInput")` (or just `GameInput` once cached
   from the singleton).
-- Wrapper classes — `GameInputDevice`, `GameInputReading`, `GameInputBinding`,
-  `GameInputActionMap`, `GameInputMapper` — are part of the public Godot-facing
-  contract. Treat their inspector-visible properties and signals as stable
-  surfaces.
+- Wrapper classes — `GameInputDevice`, `GameInputReading`,
+  `GameInputForceFeedbackEffect`, `GameInputBinding`, `GameInputActionMap`,
+  `GameInputMapper` — are part of the public Godot-facing contract. Treat
+  their inspector-visible properties, signals and constant values as stable
+  surfaces; add enum values and dictionary keys, never renumber or remove
+  them.
 - The addon is standalone: there is no build-time or runtime dependency on
   `godot_gdk`.
 
 ## Threading & Lifecycle
 
-- `IGameInput` device callbacks fire on a GameInput-owned worker thread. That
-  thread MUST NOT mutate the device cache, emit Godot signals, or call into
-  godot-cpp APIs. Worker callbacks may only push events into the
-  mutex-protected pending queue and `AddRef` the native device pointer.
+- `IGameInput` callbacks (device, reading, system-button and keyboard-layout)
+  fire on GameInput-owned worker threads. Those threads MUST NOT mutate the
+  device cache, emit Godot signals, or call into godot-cpp APIs. Worker
+  callbacks may only push events into the mutex-protected pending queue (or,
+  for readings, the preallocated reading ring) and `AddRef` the native device
+  pointer.
+- Every callback runs inside the callback fence: return early unless
+  `_enter_callback()` succeeds, and call `_leave_callback()` on every path
+  after it. `shutdown()` clears `m_accepting_callbacks`, unregisters, then
+  `_wait_for_callbacks()` drains `m_callbacks_in_flight` before releasing
+  anything. A new callback that skips the fence is a use-after-free at
+  shutdown.
 - The main thread drains the pending queue inside `GameInput::poll()`. Signals
-  are emitted from there — no `call_deferred` plumbing needed.
+  are emitted from there — no `call_deferred` plumbing needed. Device events
+  and event readings share a sequence number; keep them merged in that order.
 - `GameInput::poll()` is per-frame idempotent. The check uses
   `Engine::get_singleton()->get_process_frames()`. Real refresh runs at most
   once per frame regardless of how many `GameInputMapper` nodes (or the
@@ -32,6 +43,23 @@ applyTo: "addons/godot_gameinput/**, tests/godot/gameinput/**, sample/tutorial_g
 - `prev` button state for `GameInputReading::was_button_pressed()` /
   `was_button_released()` is updated only on the real refresh. Multiple
   `poll()` calls in the same frame won't drop edges.
+- Signal connections are dropped by the GDExtension main-loop shutdown
+  callback, before the script languages are torn down. Keep it: without it a
+  non-`self` GDScript lambda still connected at quit crashes Godot on exit
+  (`tests/godot/gameinput/tests/bootstrap/exit_with_connected_lambdas.gd`).
+
+## Readings
+
+- A reading is a fixed-size POD snapshot (`gameinput_snapshot.h`). Never keep
+  an `IGameInputReading*` past the call that produced it; copy what you need
+  into the snapshot.
+- `_real_poll()` issues one `GetCurrentReading()` per kind group
+  (`kPollGroups`). A new reading kind needs a snapshot field, a
+  `_fill_snapshot_from_reading()` branch, a poll group, a mock path in
+  `_test_push_reading()`, reading getters, doc XML, C# facade members and a
+  GUT suite.
+- Thumbstick Y follows Godot's convention (down is positive). Flip signs by
+  subtracting from `0.0`, not by negating, so a resting axis reads `+0.0`.
 
 ## Soft-Fail Conventions
 
@@ -53,6 +81,9 @@ applyTo: "addons/godot_gameinput/**, tests/godot/gameinput/**, sample/tutorial_g
 - `GameInputDevice` wrappers hold only the id (a weak handle), never a raw
   `IGameInputDevice*`. This is what makes stale wrappers safe — they become
   inert once the underlying device is gone.
+- `GameInputForceFeedbackEffect` follows the same rule: it holds an effect id,
+  and the singleton's registry owns the native effect, releasing it on
+  `release()`, wrapper free, device disconnect and shutdown.
 
 ## Action Bridge Rules
 
@@ -104,11 +135,25 @@ applyTo: "addons/godot_gameinput/**, tests/godot/gameinput/**, sample/tutorial_g
 - `sample/tutorial_gameinput/` ships as the standalone GameInput action-bridge
   sample. It uses the `GameInputBootstrap` autoload, displays connected-device
   count and hot-plug events, and is the canonical manual host for mapper,
-  device discovery, and hot-plug checks.
-- A GameInput scenario panel inside the tutorial sample tracks is not present yet.
-  Until that lands, raw rumble verification follows the
-  [GameInput manual-test checklist](../../docs/gameinput/manual-tests.md) using
-  a small local scene or other GameInput-enabled project.
+  device discovery, and hot-plug checks. Its right half is the device
+  inspector (`inspector/gameinput_inspector.gd`): live per-kind state, an
+  event log, and rumble, trigger and force-feedback buttons, which the
+  [GameInput manual-test checklist](../../docs/gameinput/manual-tests.md) is
+  written around.
+- Both samples run an integration self-test with `--gameinput-selftest`
+  (`selftest/gameinput_selftest.gd`, `SelfTest/GameInputSelfTest.cs`). Every
+  check reports PASS, FAIL or SKIP with a reason into a JSON report; exit code
+  0 means no failures (and, with `--gameinput-strict`, no skips). Drive it
+  with `tools/run_gameinput_selftest.ps1` (`-VirtualPad` adds the
+  `tools/virtual_gamepad/vpad_driver.py` ViGEm pad; `-Project
+  sample\tutorial_gameinput_csharp` runs the C# sample). When you add public
+  API, add or extend a self-test check, and keep the check tables in both
+  sample READMEs current.
+- Live GameInput input needs an unlocked, local interactive session. A locked
+  or disconnected Remote Desktop session receives no readings, so
+  input-dependent checks SKIP there rather than FAIL.
+- A GameInput scenario panel inside the tutorial sample tracks is not present
+  yet.
 - The headless test entry point for GameInput is the repo-root orchestrator:
 
 ```powershell
@@ -143,3 +188,33 @@ cd tests\godot\gameinput
 - `spec/gdext-gameinput.md` is the source of truth for design decisions and
   deferred work. Mark sections shipped or note deviations there when
   scope changes.
+
+## Keeping Surfaces in Sync
+
+A public API change is not done until all of these agree:
+
+1. The binding in `_bind_methods()` and its doc XML entry (doc XML is what
+   users read; check examples, key names and limits against the code).
+2. The C# facade in `addons/godot_gameinput_csharp/` — a wrapper for every
+   method, property and signal, and an enum member with the same value for
+   every constant. `tools/run_csharp_tests.ps1` (FacadeParity.Tests) fails on
+   a missing wrapper or a mismatched value, and the C# sample's `api.facade`
+   self-test check repeats the value check at runtime.
+3. A GUT suite under `tests/godot/gameinput/tests/`, using the mock backend
+   when the behaviour needs a device.
+4. The sample self-tests and inspector, where the feature is user-visible.
+5. `docs/gameinput/plugin.md`, `docs/gameinput/csharp.md`,
+   `docs/gameinput/manual-tests.md` (for anything a mock can't prove) and this
+   spec.
+
+## Test Seams
+
+- Test-only methods are named `_test_*` and are bound under `#ifndef NDEBUG`
+  in `_bind_methods()`, so the release DLL does not contain them. They are
+  not documented in doc XML, so the C# parity test never sees them.
+- The mock backend replaces the native runtime with scripted devices but
+  feeds the same queues, snapshots, signals and timers. A seam must never
+  bypass the drain in `poll()`, or the tests stop covering the real path.
+- GUT suites start and end mock sessions with `begin_mock_session()` /
+  `end_mock_session()` from `gameinput_test_base.gd`; against a release DLL
+  `begin_mock_session()` marks the test pending instead of failing it.

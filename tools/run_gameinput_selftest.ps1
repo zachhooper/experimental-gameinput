@@ -74,7 +74,12 @@
     pwsh -File tools\run_gameinput_selftest.ps1
 
 .EXAMPLE
-    pwsh -File tools\run_gameinput_selftest.ps1 -VirtualPad -Strict
+    pwsh -File tools\run_gameinput_selftest.ps1 -VirtualPad
+
+.EXAMPLE
+    pwsh -File tools\run_gameinput_selftest.ps1 -Strict
+    On a machine whose controllers have rumble, force-feedback motors and
+    haptics, so no runtime check has a reason to skip.
 
 .EXAMPLE
     pwsh -File tools\run_gameinput_selftest.ps1 -Project sample\tutorial_gameinput_csharp -Godot <Godot .NET console exe>
