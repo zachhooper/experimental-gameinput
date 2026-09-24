@@ -70,6 +70,13 @@ func _joy_button(index: int) -> InputEventJoypadButton:
 	return ev
 
 
+func _joy_motion(axis: int, value: float) -> InputEventJoypadMotion:
+	var ev := InputEventJoypadMotion.new()
+	ev.axis = axis
+	ev.axis_value = value
+	return ev
+
+
 func _tick() -> void:
 	_mapper.notification(Node.NOTIFICATION_PROCESS)
 
@@ -105,7 +112,39 @@ func test_paddles_dedupe_against_godot_paddle_buttons() -> void:
 	var trigger := &"test_gi_v2_trigger_button"
 	_action(trigger, [_joy_button(16)])
 	assert_false(_mapper._test_native_handles_binding(_binding(trigger, _d("SRC_BTN_LEFT_TRIGGER"))),
-			"sources with no Godot joypad button never dedupe")
+			"a trigger button does not match a joypad button")
+
+
+func test_trigger_and_stick_direction_buttons_dedupe_against_godot_axes() -> void:
+	# GameInput reports the trigger buttons and stick directions as buttons;
+	# Godot delivers the same controls as joypad axis motion, Y down-positive.
+	var cases := [
+		["SRC_BTN_LEFT_TRIGGER", JOY_AXIS_TRIGGER_LEFT, 1.0],
+		["SRC_BTN_RIGHT_TRIGGER", JOY_AXIS_TRIGGER_RIGHT, 1.0],
+		["SRC_BTN_LEFT_STICK_UP", JOY_AXIS_LEFT_Y, -1.0],
+		["SRC_BTN_LEFT_STICK_DOWN", JOY_AXIS_LEFT_Y, 1.0],
+		["SRC_BTN_LEFT_STICK_LEFT", JOY_AXIS_LEFT_X, -1.0],
+		["SRC_BTN_LEFT_STICK_RIGHT", JOY_AXIS_LEFT_X, 1.0],
+		["SRC_BTN_RIGHT_STICK_UP", JOY_AXIS_RIGHT_Y, -1.0],
+		["SRC_BTN_RIGHT_STICK_DOWN", JOY_AXIS_RIGHT_Y, 1.0],
+		["SRC_BTN_RIGHT_STICK_LEFT", JOY_AXIS_RIGHT_X, -1.0],
+		["SRC_BTN_RIGHT_STICK_RIGHT", JOY_AXIS_RIGHT_X, 1.0],
+	]
+	if _new_mapper([]) == null:
+		return
+	for c in cases:
+		var action := StringName("test_gi_v2_%s" % String(c[0]).to_lower())
+		_action(action, [_joy_motion(c[1], c[2])])
+		assert_true(_mapper._test_native_handles_binding(_binding(action, _d(c[0]))),
+				"%s is already delivered by Godot as axis %d, direction %+.0f" % [c[0], c[1], c[2]])
+		var opposite := StringName("%s_opposite" % action)
+		_action(opposite, [_joy_motion(c[1], -c[2])])
+		assert_false(_mapper._test_native_handles_binding(_binding(opposite, _d(c[0]))),
+				"%s does not match axis %d in the other direction" % [c[0], c[1]])
+		var other_axis := StringName("%s_other_axis" % action)
+		_action(other_axis, [_joy_motion((c[1] + 1) % 6, c[2])])
+		assert_false(_mapper._test_native_handles_binding(_binding(other_axis, _d(c[0]))),
+				"%s does not match another axis" % c[0])
 
 
 func test_racing_wheel_axis_drives_an_action() -> void:

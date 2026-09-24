@@ -100,7 +100,10 @@ keep keyboard events; the bridge is additive.)
 > **One gotcha:** if you also bind `ui_accept` to "Joypad Button A"
 > in the Input Map, the built-in joypad backend will fire it too —
 > the mapper detects this and skips its own synthetic event for
-> that one binding so you don't double-fire. The polled state
+> that one binding so you don't double-fire. The same check covers
+> the left-stick events in Godot's default `ui_up` / `ui_down` /
+> `ui_left` / `ui_right`, so a stick-direction binding such as
+> `SRC_BTN_LEFT_STICK_UP` on `ui_up` also fires once. The polled state
 > (`Input.is_action_pressed("ui_accept")`) is still refreshed each
 > frame either way.
 

@@ -404,7 +404,12 @@ already wired to deliver the same action through a matching
 default project mapping for `ui_accept` etc.), the Mapper suppresses its own
 `InputEventAction` for that binding so menu actions fire exactly once per
 physical press instead of twice. For this check the Elite paddles match
-Godot's `JOY_BUTTON_PADDLE1` to `JOY_BUTTON_PADDLE4`.
+Godot's `JOY_BUTTON_PADDLE1` to `JOY_BUTTON_PADDLE4`, and the digital trigger
+buttons and thumbstick directions (`SRC_BTN_LEFT_TRIGGER`,
+`SRC_BTN_LEFT_STICK_UP` and so on) match an `InputEventJoypadMotion` on the
+same axis in the same direction. Stick Y is down-positive in Godot, so a
+stick-up binding matches a negative `axis_value`, which is how the default
+`ui_up` action lists the left stick.
 
 ### Soft-fail behaviour
 

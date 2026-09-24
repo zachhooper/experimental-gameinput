@@ -92,6 +92,7 @@ private:
 
     static int _source_to_joy_button(int source);
     static int _source_to_joy_axis(int source);
+    static bool _source_to_joy_axis_direction(int source, int &r_axis, float &r_sign);
 
 protected:
     static void _bind_methods();

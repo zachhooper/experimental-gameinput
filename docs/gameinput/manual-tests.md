@@ -207,6 +207,9 @@ node into a scene and assign a small `GameInputActionMap` with one binding.
 - [ ] Bind `ui_accept` to an Elite paddle (`SRC_BTN_PADDLE_RIGHT_1`) and map
   `JOY_BUTTON_PADDLE1` to `ui_accept` in the `InputMap`: one paddle press
   presses a focused button once, not twice.
+- [ ] Bind `ui_down` to `SRC_BTN_LEFT_STICK_DOWN` and keep Godot's default
+  `ui_down` events (they include the left stick pushed down): in a column of
+  buttons, one flick of the stick moves focus one step, not two.
 - [ ] With `target_kind_mask = KIND_RACING_WHEEL`, a binding to
   `SRC_AXIS_WHEEL` drives its action from the wheel.
 

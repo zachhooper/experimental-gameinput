@@ -53,7 +53,7 @@ The core architectural rule is: **C++ is internal; GDScript is the primary publi
 | Mock backend | Shipped (v2), debug builds only | `_test_*` seams under `#ifndef NDEBUG` drive the real pipeline for GUT and the sample self-test |
 | Battery state | Removed | GameInput v3 SDK dropped the battery API (`IGameInputDevice::GetBatteryState`, `GameInputBatteryState`) — no replacement upstream |
 | Device info | Shipped (v1), extended in v2 | `GameInputDevice.get_device_info()` (issue #23, device-info half); v2 adds family, status, app-local ids, rumble and system-button masks, per-kind capability dictionaries and force-feedback motors; keys are only ever added |
-| Godot action bridge | Shipped (v1), extended in v2 | `GameInputMapper` + `GameInputActionMap` + `GameInputBinding`; v2 adds arcade/flight/wheel sources and paddle duplicate detection |
+| Godot action bridge | Shipped (v1), extended in v2 | `GameInputMapper` + `GameInputActionMap` + `GameInputBinding`; v2 adds arcade/flight/wheel sources and duplicate detection for paddles, trigger buttons and stick directions |
 | Project Settings + bootstrap autoload | Shipped (v1) | EditorPlugin installs `GameInputBootstrap` autoload; v2 adds two runtime settings |
 | Raw device reports, `IGameInputMapper`, dispatcher control, haptic waveform playback, XInput fallback | Deferred | see [§ Deferred](#deferred) |
 | Dependency on `godot_gdk` | None | ships independently |
@@ -537,10 +537,14 @@ callback fence, signals emitted from `poll()`, soft-fail everywhere. It adds:
 - **A resting stick reads `+0.0`.** Thumbstick Y is flipped to Godot's
   down-is-positive convention by subtracting from `0.0` rather than negating,
   so a centred stick never prints `-0.00`.
-- **Paddles dedupe against Godot's joypad buttons.** `GameInputMapper` maps
-  the Elite paddles to `JOY_BUTTON_PADDLE1`–`PADDLE4` in SDL order (right
-  upper, left upper, right lower, left lower) when it checks the `InputMap`
-  for duplicate native bindings.
+- **Paddles, trigger buttons and stick directions dedupe against Godot's
+  joypad events.** When `GameInputMapper` checks the `InputMap` for duplicate
+  native bindings, it maps the Elite paddles to `JOY_BUTTON_PADDLE1`–`PADDLE4`
+  in SDL order (right upper, left upper, right lower, left lower), and the
+  digital trigger buttons and thumbstick directions to one direction of the
+  matching `JoyAxis` (stick Y down-positive, as in Godot's default `ui_up` /
+  `ui_down` events). A `JoypadMotion` event whose `axis_value` is 0 counts as
+  either direction, which is the rule v1 already used for axis bindings.
 - **Physical keys come from scan codes.** Keyboard readings expose Godot
   physical `Key` values derived from scan codes (layout-independent, like
   `InputEventKey.physical_keycode`), plus the virtual-key and Unicode values

@@ -480,6 +480,48 @@ int GameInputMapper::_source_to_joy_axis(int source) {
     }
 }
 
+bool GameInputMapper::_source_to_joy_axis_direction(int source, int &r_axis, float &r_sign) {
+    using GD = GameInputDevice;
+    // GameInput reports the trigger buttons and thumbstick directions as
+    // buttons; Godot reports the same controls as one direction of a JoyAxis.
+    // Stick Y is down-positive in Godot, so "up" is the negative direction.
+    switch (source) {
+        case GD::SRC_BTN_LEFT_TRIGGER:      r_axis = 4; r_sign = 1.0f;  return true; // JOY_AXIS_TRIGGER_LEFT
+        case GD::SRC_BTN_RIGHT_TRIGGER:     r_axis = 5; r_sign = 1.0f;  return true; // JOY_AXIS_TRIGGER_RIGHT
+        case GD::SRC_BTN_LEFT_STICK_UP:     r_axis = 1; r_sign = -1.0f; return true; // JOY_AXIS_LEFT_Y
+        case GD::SRC_BTN_LEFT_STICK_DOWN:   r_axis = 1; r_sign = 1.0f;  return true;
+        case GD::SRC_BTN_LEFT_STICK_LEFT:   r_axis = 0; r_sign = -1.0f; return true; // JOY_AXIS_LEFT_X
+        case GD::SRC_BTN_LEFT_STICK_RIGHT:  r_axis = 0; r_sign = 1.0f;  return true;
+        case GD::SRC_BTN_RIGHT_STICK_UP:    r_axis = 3; r_sign = -1.0f; return true; // JOY_AXIS_RIGHT_Y
+        case GD::SRC_BTN_RIGHT_STICK_DOWN:  r_axis = 3; r_sign = 1.0f;  return true;
+        case GD::SRC_BTN_RIGHT_STICK_LEFT:  r_axis = 2; r_sign = -1.0f; return true; // JOY_AXIS_RIGHT_X
+        case GD::SRC_BTN_RIGHT_STICK_RIGHT: r_axis = 2; r_sign = 1.0f;  return true;
+        default: return false;
+    }
+}
+
+namespace {
+
+// True when `events` holds an InputEventJoypadMotion on `axis` in the
+// `pressed_sign` direction. An axis_value of 0 is a wildcard so
+// unconfigured-direction events still suppress the mapper's emit.
+bool has_joy_motion(const TypedArray<Ref<InputEvent>> &events, int axis, float pressed_sign) {
+    for (int i = 0; i < events.size(); ++i) {
+        Ref<InputEvent> ev = events[i];
+        if (ev.is_null()) continue;
+        Ref<InputEventJoypadMotion> motion = ev;
+        if (motion.is_null()) continue;
+        if ((int)motion->get_axis() != axis) continue;
+        float ev_val = motion->get_axis_value();
+        if (ev_val == 0.0f || ev_val * pressed_sign > 0.0f) {
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace
+
 bool GameInputMapper::_native_path_handles_binding(
         const Ref<GameInputBinding> &binding,
         const StringName &action) const {
@@ -507,20 +549,13 @@ bool GameInputMapper::_native_path_handles_binding(
         // event's axis_value sign equals -1 when axis_invert is true and +1
         // otherwise.
         float pressed_sign = binding->get_axis_invert() ? -1.0f : 1.0f;
-        for (int i = 0; i < events.size(); ++i) {
-            Ref<InputEvent> ev = events[i];
-            if (ev.is_null()) continue;
-            Ref<InputEventJoypadMotion> motion = ev;
-            if (motion.is_null()) continue;
-            if ((int)motion->get_axis() != target_axis) continue;
-            // axis_value > 0 → positive direction matches; treat 0 as a
-            // wildcard so unconfigured-direction events still suppress emit.
-            float ev_val = motion->get_axis_value();
-            if (ev_val == 0.0f || ev_val * pressed_sign > 0.0f) {
-                return true;
-            }
-        }
-        return false;
+        return has_joy_motion(events, target_axis, pressed_sign);
+    }
+
+    int direction_axis = -1;
+    float direction_sign = 1.0f;
+    if (_source_to_joy_axis_direction(binding->get_source(), direction_axis, direction_sign)) {
+        return has_joy_motion(events, direction_axis, direction_sign);
     }
 
     int target_button = _source_to_joy_button(binding->get_source());
