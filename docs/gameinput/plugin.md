@@ -332,6 +332,15 @@ producing readings but leaves it in `get_devices()`; calling
 `create_aggregate_device()` again for the same kind re-enables it under the
 same id.
 
+Rumble sent to an enabled aggregate reaches its member pads, and a timed
+`start_vibration()` on the aggregate stops them on time; the self-test's
+`vpad.aggregate_rumble` check verifies this against a virtual Xbox 360 pad.
+Once the aggregate is disabled, rumble sent to it no longer reaches them.
+The aggregate reports all four rumble motors (`get_supported_rumble_motors()`
+returns `15`) even when its only member has just the low- and
+high-frequency motors, so check a member pad's motors before you rely on
+trigger rumble.
+
 ## Quick recipes
 
 ### Rumble a pad on a button press

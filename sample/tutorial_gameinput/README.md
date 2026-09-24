@@ -96,6 +96,7 @@ devices, and restore the real runtime at the end.
 | `vpad.info` | It reports the Xbox 360 family and both rumble motors. |
 | `vpad.input` | Its A button and left stick arrive through polling, `reading_received` and the mapper. |
 | `vpad.rumble` | A timed rumble reaches the virtual motors and stops on time, checked against the driver's log. |
+| `vpad.aggregate_rumble` | Rumble sent to an enabled aggregate gamepad reaches the virtual pad's motors and stops on time. |
 | `mock.session` | The mock backend takes over. |
 | `sample.hotplug_ui` | A scripted pad reaches `device_connected`, the device list, the count and the hot-plug log on the next frame. |
 | `sample.action_bridge` | A presses `jump` and `ui_accept`; the stick drives `move_left` / `move_right` with deadzone rescaling. |

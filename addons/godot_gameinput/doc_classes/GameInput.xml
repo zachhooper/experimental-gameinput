@@ -150,6 +150,7 @@
 				Asks GameInput for an aggregate device: a virtual device that combines the input of every connected device of one kind. [param kind] must be a single [enum DeviceKind] flag; GameInput aggregates [constant DEVICE_GAMEPAD], [constant DEVICE_KEYBOARD], [constant DEVICE_MOUSE], [constant DEVICE_ARCADE_STICK], [constant DEVICE_FLIGHT_STICK] and [constant DEVICE_RACING_WHEEL]. Calling it again for a kind whose aggregate was disabled re-enables that aggregate instead of creating another.
 				Returns the app-local id GameInput assigned to the aggregate, as the 64-character hexadecimal [String] that [method disable_aggregate_device] accepts. Returns an empty [String] when the runtime is not initialized, and an empty [String] with a warning when [param kind] has no device-kind bits or GameInput rejects the request, for example because [param kind] combines several kinds.
 				GameInput reports aggregate devices through its device callback, so an aggregate arrives through [signal device_connected] like other devices, with [constant GameInputDevice.FAMILY_AGGREGATE] as its family.
+				Rumble sent to an enabled aggregate with [method GameInputDevice.start_vibration] reaches its member devices. The aggregate reports every [enum GameInputDevice.RumbleMotor] flag even when its members have fewer motors.
 			</description>
 		</method>
 		<method name="disable_aggregate_device">
@@ -157,7 +158,7 @@
 			<param index="0" name="app_local_id" type="String" />
 			<description>
 				Disables an aggregate device created by [method create_aggregate_device]. [param app_local_id] must be the 64-character hexadecimal id that method returned; anything else returns [code]false[/code] with a warning. Returns [code]true[/code] on success, or [code]false[/code] when GameInput rejects the request or the runtime is not initialized.
-				Disabling does not disconnect the aggregate: it stays in [method get_devices] but stops producing aggregated readings and status changes. Call [method create_aggregate_device] with the same kind to re-enable it; GameInput returns the same id.
+				Disabling does not disconnect the aggregate: it stays in [method get_devices] but stops producing aggregated readings and status changes, and rumble sent to it no longer reaches its members. Call [method create_aggregate_device] with the same kind to re-enable it; GameInput returns the same id.
 			</description>
 		</method>
 	</methods>

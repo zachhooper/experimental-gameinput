@@ -183,7 +183,9 @@ With two pads connected, call
 
 - [ ] A device named `GameInput Aggregate Device` with family `AGGREGATE`
   appears in the inspector, and its live reading follows both pads.
-- [ ] Record whether rumble sent to the aggregate reaches the pads.
+- [ ] Rumble sent to the aggregate reaches both pads. (The self-test's
+  `vpad.aggregate_rumble` check covers one virtual member pad; two real
+  pads have not been tried.)
 
 ### Mapper — `Input.is_action_pressed` integration
 

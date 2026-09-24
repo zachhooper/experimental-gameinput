@@ -59,6 +59,13 @@ const VPAD_EXPECT_LARGE := 191
 const VPAD_EXPECT_SMALL := 64
 const VPAD_RUMBLE_TOLERANCE := 8
 const VPAD_RUMBLE_WAIT_SEC := 3.0
+# The aggregate round trip uses other magnitudes, so its pulse cannot be
+# mistaken for the direct one: 0.6 * 255 = 153 large, 0.4 * 255 = 102 small.
+const VPAD_AGG_RUMBLE_WEAK := 0.4
+const VPAD_AGG_RUMBLE_STRONG := 0.6
+const VPAD_AGG_RUMBLE_SEC := 0.5
+const VPAD_AGG_EXPECT_LARGE := 153
+const VPAD_AGG_EXPECT_SMALL := 102
 
 const CLASSES := [
 	"GameInput", "GameInputDevice", "GameInputReading", "GameInputForceFeedbackEffect",
@@ -246,6 +253,7 @@ func _run() -> void:
 		await _check("vpad.info", _check_vpad_info)
 		await _check("vpad.input", _check_vpad_input)
 		await _check("vpad.rumble", _check_vpad_rumble)
+		await _check("vpad.aggregate_rumble", _check_vpad_aggregate_rumble)
 
 	await _check("mock.session", _check_mock_session)
 	await _check("sample.hotplug_ui", _check_sample_hotplug_ui)
@@ -1090,19 +1098,58 @@ func _check_vpad_rumble() -> bool:
 	if mapper != null:
 		mapper.target_device_id = 0x7FFFFFFF
 	await _frames(2)
-	var completed = await _vpad_rumble_round_trip()
+	var completed = await _vpad_rumble_round_trip(_vpad, VPAD_RUMBLE_WEAK, VPAD_RUMBLE_STRONG, VPAD_RUMBLE_SEC,
+			VPAD_EXPECT_LARGE, VPAD_EXPECT_SMALL, "")
 	if mapper != null:
 		mapper.target_device_id = previous_target
 	return completed == true
 
 
-func _vpad_rumble_round_trip() -> bool:
+# Rumble sent to an enabled aggregate gamepad has to reach its member pads.
+func _check_vpad_aggregate_rumble() -> bool:
+	if _vpad == null:
+		_skip("the virtual pad is not present")
+		return true
+	if _options.vpad_log == "":
+		_skip("pass --gameinput-vpad-log to see whether rumble sent to the aggregate reaches the pad")
+		return true
+	var id: String = _gi.create_aggregate_device(_k("DEVICE_GAMEPAD"))
+	_note("app_local_id", id)
+	if id.is_empty():
+		_skip("create_aggregate_device is not available on this GameInput runtime")
+		return true
+	var aggregate = null
+	var deadline := Time.get_ticks_msec() + 1500
+	while Time.get_ticks_msec() < deadline and aggregate == null:
+		await _frames(1)
+		aggregate = _find_aggregate(id)
+	if aggregate == null:
+		_gi.disable_aggregate_device(id)
+		_skip("the aggregate gamepad did not surface within 1.5 s")
+		return true
+	_note("aggregate_device_id", aggregate.get_device_id())
+	_note("aggregate_rumble_motors", aggregate.get_supported_rumble_motors())
+	var mapper = sample.get_mapper() if sample != null else null
+	var previous_target: int = mapper.target_device_id if mapper != null else -1
+	if mapper != null:
+		mapper.target_device_id = 0x7FFFFFFF
+	await _frames(2)
+	var completed = await _vpad_rumble_round_trip(aggregate, VPAD_AGG_RUMBLE_WEAK, VPAD_AGG_RUMBLE_STRONG,
+			VPAD_AGG_RUMBLE_SEC, VPAD_AGG_EXPECT_LARGE, VPAD_AGG_EXPECT_SMALL, "rumble sent to the aggregate reached the pad: ")
+	if mapper != null:
+		mapper.target_device_id = previous_target
+	_expect(_gi.disable_aggregate_device(id), "disable_aggregate_device rejected the aggregate's id")
+	return completed == true
+
+
+func _vpad_rumble_round_trip(device, weak: float, strong: float, seconds: float,
+		expect_large: int, expect_small: int, detail_prefix: String) -> bool:
 	var sent_at := Time.get_unix_time_from_system()
-	_expect(_vpad.start_vibration(VPAD_RUMBLE_WEAK, VPAD_RUMBLE_STRONG, VPAD_RUMBLE_SEC), "start_vibration failed")
-	_expect(_vpad.is_vibrating(), "is_vibrating() is false right after start_vibration")
-	_expect_near(_vpad.get_vibration_strength().y, VPAD_RUMBLE_STRONG, "strong strength")
-	await _seconds(VPAD_RUMBLE_SEC + 0.3)
-	_expect(not _vpad.is_vibrating(), "poll() did not stop the timed vibration")
+	_expect(device.start_vibration(weak, strong, seconds), "start_vibration failed")
+	_expect(device.is_vibrating(), "is_vibrating() is false right after start_vibration")
+	_expect_near(device.get_vibration_strength().y, strong, "strong strength")
+	await _seconds(seconds + 0.3)
+	_expect(not device.is_vibrating(), "poll() did not stop the timed vibration")
 	if _options.vpad_log == "":
 		_pass_detail("rumble started and stopped (pass --gameinput-vpad-log to cross-check the driver)")
 		return true
@@ -1120,8 +1167,8 @@ func _vpad_rumble_round_trip() -> bool:
 			var large := int(entry.get("large", -1))
 			var small := int(entry.get("small", -1))
 			if matched.is_empty():
-				if absi(large - VPAD_EXPECT_LARGE) <= VPAD_RUMBLE_TOLERANCE \
-						and absi(small - VPAD_EXPECT_SMALL) <= VPAD_RUMBLE_TOLERANCE:
+				if absi(large - expect_large) <= VPAD_RUMBLE_TOLERANCE \
+						and absi(small - expect_small) <= VPAD_RUMBLE_TOLERANCE:
 					matched = entry
 			elif large == 0 and small == 0:
 				stopped = entry
@@ -1132,16 +1179,16 @@ func _vpad_rumble_round_trip() -> bool:
 	_note("driver_rumble", matched)
 	_note("driver_stop", stopped)
 	if not _expect(not matched.is_empty(), "the vpad driver never logged large=%d small=%d (strong -> low-frequency motor)" % [
-			VPAD_EXPECT_LARGE, VPAD_EXPECT_SMALL]):
+			expect_large, expect_small]):
 		return true
 	if not _expect(not stopped.is_empty(), "the vpad driver never logged the auto-stop (large=0 small=0)"):
 		return true
 	var held := float(stopped.t) - float(matched.t)
 	_note("held_sec", held)
-	_expect(held >= VPAD_RUMBLE_SEC * 0.5 and held <= VPAD_RUMBLE_SEC + 1.5,
-			"rumble lasted %.3f s at the driver, expected about %.2f s" % [held, VPAD_RUMBLE_SEC])
-	_pass_detail("driver saw large=%d small=%d, then the auto-stop %.2f s later" % [
-			int(matched.large), int(matched.small), held])
+	_expect(held >= seconds * 0.5 and held <= seconds + 1.5,
+			"rumble lasted %.3f s at the driver, expected about %.2f s" % [held, seconds])
+	_pass_detail("%sdriver saw large=%d small=%d, then the auto-stop %.2f s later" % [
+			detail_prefix, int(matched.large), int(matched.small), held])
 	return true
 
 
