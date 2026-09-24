@@ -137,6 +137,26 @@ func get_live_text() -> String:
 	return _live.text
 
 
+## The action button named [param action]: "rumble", "triggers", "stop" or
+## "force_feedback". Returns null for any other name.
+func get_action_button(action: String) -> Button:
+	match action:
+		"rumble":
+			return _rumble_button
+		"triggers":
+			return _trigger_button
+		"stop":
+			return _stop_button
+		"force_feedback":
+			return _ffb_button
+	return null
+
+
+## The event log, oldest line first.
+func get_log_lines() -> Array:
+	return _log_lines.duplicate()
+
+
 # ── UI ───────────────────────────────────────────────────────────────────
 
 func _build_ui() -> void:
@@ -358,15 +378,17 @@ func _sync_toggles() -> void:
 func _on_rumble_pressed() -> void:
 	var device = _selected_device()
 	if device != null:
-		device.start_vibration(0.5, 0.5, RUMBLE_SEC)
-		_append_log("rumble 0.5 / 0.5 for %.1f s on %s" % [RUMBLE_SEC, device.get_display_name()])
+		var sent: bool = device.start_vibration(0.5, 0.5, RUMBLE_SEC)
+		_append_log("rumble 0.5 / 0.5 for %.1f s on %s%s"
+				% [RUMBLE_SEC, device.get_display_name(), "" if sent else " (refused)"])
 
 
 func _on_triggers_pressed() -> void:
 	var device = _selected_device()
 	if device != null:
-		device.start_vibration(0.0, 0.0, RUMBLE_SEC, 0.6, 0.6)
-		_append_log("impulse triggers 0.6 / 0.6 for %.1f s on %s" % [RUMBLE_SEC, device.get_display_name()])
+		var sent: bool = device.start_vibration(0.0, 0.0, RUMBLE_SEC, 0.6, 0.6)
+		_append_log("impulse triggers 0.6 / 0.6 for %.1f s on %s%s"
+				% [RUMBLE_SEC, device.get_display_name(), "" if sent else " (refused)"])
 
 
 func _on_stop_pressed() -> void:
@@ -395,7 +417,11 @@ func _on_ffb_pressed() -> void:
 	if _effect == null:
 		_append_log("GameInput refused the force-feedback effect")
 		return
-	_effect.start()
+	if not _effect.start():
+		_append_log("GameInput refused to start the force-feedback effect")
+		_effect.release()
+		_effect = null
+		return
 	_effect_release_msec = Time.get_ticks_msec() + int((FFB_PULSE_SEC + 0.2) * 1000)
 	_append_log("constant force 0.3 for %.1f s on motor 0" % FFB_PULSE_SEC)
 

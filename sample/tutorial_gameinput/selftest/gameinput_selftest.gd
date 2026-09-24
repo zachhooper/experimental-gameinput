@@ -1303,8 +1303,41 @@ func _check_sample_inspector() -> bool:
 	_expect(live.contains("LT 0.50"), "the inspector's live view does not show the left trigger")
 	_gi._test_push_reading(_mock_pad_id, {"gamepad": {}})
 	await _frames(1)
-	_pass_detail("inspector lists the pad and renders its live state")
+	_check_inspector_rumble_buttons(inspector)
+	_pass_detail("inspector lists the pad, renders its live state, and its Rumble, Triggers and Stop buttons drive the motors")
 	return true
+
+
+# Presses the inspector's real buttons (their `pressed` signals) and reads
+# back what reached the mock pad's motors.
+func _check_inspector_rumble_buttons(inspector) -> void:
+	var rumble_button: Button = inspector.get_action_button("rumble")
+	var trigger_button: Button = inspector.get_action_button("triggers")
+	var stop_button: Button = inspector.get_action_button("stop")
+	if not _expect(rumble_button != null and trigger_button != null and stop_button != null,
+			"the inspector does not expose its Rumble, Triggers and Stop buttons"):
+		return
+	if not _expect(not rumble_button.disabled and not trigger_button.disabled and not stop_button.disabled,
+			"the inspector disabled a rumble button for a pad with every rumble motor"):
+		return
+	var before: int = _gi._test_get_last_rumble(_mock_pad_id).apply_count
+	rumble_button.pressed.emit()
+	var rumble: Dictionary = _gi._test_get_last_rumble(_mock_pad_id)
+	_note("inspector_rumble", rumble)
+	if _expect(rumble.apply_count > before and rumble.active, "pressing Rumble did not start the motors"):
+		_expect_near(rumble.low, 0.5, "Rumble strong (low-frequency) motor")
+		_expect_near(rumble.high, 0.5, "Rumble weak (high-frequency) motor")
+	var last_log: String = str(inspector.get_log_lines().back()) if not inspector.get_log_lines().is_empty() else ""
+	_expect(last_log.begins_with("rumble 0.5 / 0.5") and not last_log.ends_with("(refused)"),
+			"the inspector logged \"%s\" for Rumble" % last_log)
+	trigger_button.pressed.emit()
+	var triggers: Dictionary = _gi._test_get_last_rumble(_mock_pad_id)
+	_note("inspector_triggers", triggers)
+	_expect_near(triggers.left_trigger, 0.6, "Triggers left impulse trigger")
+	_expect_near(triggers.right_trigger, 0.6, "Triggers right impulse trigger")
+	_expect_near(triggers.low, 0.0, "Triggers leaves the strong motor off")
+	stop_button.pressed.emit()
+	_expect(not _gi._test_get_last_rumble(_mock_pad_id).active, "pressing Stop did not stop the motors")
 
 
 func _check_sample_disconnect_releases() -> bool:
