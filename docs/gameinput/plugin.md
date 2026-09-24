@@ -418,7 +418,11 @@ buttons and thumbstick directions (`SRC_BTN_LEFT_TRIGGER`,
 `SRC_BTN_LEFT_STICK_UP` and so on) match an `InputEventJoypadMotion` on the
 same axis in the same direction. Stick Y is down-positive in Godot, so a
 stick-up binding matches a negative `axis_value`, which is how the default
-`ui_up` action lists the left stick.
+`ui_up` action lists the left stick. Arcade stick, flight stick and racing
+wheel sources, including the wheel and flight axes, have no standard Godot
+joypad equivalent, so the Mapper never suppresses them. If Godot's own joypad
+backend also reports such a device, bind its actions through the Mapper only;
+an action bound through both paths fires once from each.
 
 ### Soft-fail behaviour
 

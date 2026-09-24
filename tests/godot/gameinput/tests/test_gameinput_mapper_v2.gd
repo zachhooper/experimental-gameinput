@@ -253,3 +253,36 @@ func test_gamepad_bindings_ignore_other_kinds() -> void:
 	push_mock_reading(_gi, wheel, {"racing_wheel": {"buttons": 0x3FFF}})
 	_tick()
 	assert_false(Input.is_action_pressed(jump), "gamepad sources read as up on a wheel")
+
+
+func test_specialty_sources_are_never_suppressed() -> void:
+	# Godot has no standard joypad mapping for arcade stick, flight stick or
+	# racing wheel controls, so the mapper keeps its own events for them even
+	# when the action also lists every SDL joypad button and axis direction.
+	if _new_mapper([]) == null:
+		return
+	var action := &"test_gi_v2_every_joypad_event"
+	var events: Array = []
+	for i in range(JOY_BUTTON_SDL_MAX):
+		events.append(_joy_button(i))
+	for axis in range(JOY_AXIS_SDL_MAX):
+		events.append(_joy_motion(axis, 1.0))
+		events.append(_joy_motion(axis, -1.0))
+	_action(action, events)
+	assert_true(_mapper._test_native_handles_binding(_binding(action, _d("SRC_BTN_A"))),
+			"control: a gamepad button on the same action is suppressed")
+	assert_true(_mapper._test_native_handles_binding(_binding(action, _d("SRC_AXIS_LEFT_X"), true)),
+			"control: a gamepad axis on the same action is suppressed")
+	var buttons := 0
+	for first in [_d("SRC_ARCADE_MENU"), _d("SRC_FLIGHT_MENU"), _d("SRC_WHEEL_MENU")]:
+		for source in range(first, first + 14):
+			buttons += 1
+			assert_false(_mapper._test_native_handles_binding(_binding(action, source)),
+					"specialty button source %d is not suppressed" % source)
+	assert_eq(buttons, 42, "every arcade, flight and wheel button source was checked")
+	for source in range(_d("SRC_AXIS_WHEEL"), _d("SRC_AXIS_FLIGHT_THROTTLE") + 1):
+		for invert in [false, true]:
+			var b = _binding(action, source, true)
+			b.set("axis_invert", invert)
+			assert_false(_mapper._test_native_handles_binding(b),
+					"specialty axis source %d (invert %s) is not suppressed" % [source, invert])

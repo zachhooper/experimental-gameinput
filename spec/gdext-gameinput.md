@@ -440,7 +440,9 @@ during implementation and validated through a rubber-duck design pass:
   the project's `InputMap` (e.g., the default `ui_accept` mapping that
   includes joypad button A), the Mapper detects the duplicate per binding,
   caches the result, and skips its own `InputEventAction` so menu actions
-  fire exactly once per physical press instead of twice.
+  fire exactly once per physical press instead of twice. Arcade stick,
+  flight stick and racing wheel sources have no standard Godot joypad
+  mapping, so the Mapper never suppresses them.
   Action names must already exist in `InputMap`; missing actions trigger a
   single per-instance `push_warning` (debounced via
   `HashSet<StringName> m_warned_missing_actions`).

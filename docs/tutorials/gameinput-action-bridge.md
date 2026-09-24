@@ -105,7 +105,9 @@ keep keyboard events; the bridge is additive.)
 > `ui_left` / `ui_right`, so a stick-direction binding such as
 > `SRC_BTN_LEFT_STICK_UP` on `ui_up` also fires once. The polled state
 > (`Input.is_action_pressed("ui_accept")`) is still refreshed each
-> frame either way.
+> frame either way. Arcade stick, flight stick and racing wheel sources
+> have no standard Godot joypad equivalent and are never skipped, so
+> bind those actions through the mapper only.
 
 ## Step 2 — Create a `GameInputActionMap` resource
 
