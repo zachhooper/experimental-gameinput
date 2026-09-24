@@ -308,7 +308,10 @@ keys, their ranges and defaults are listed in the
 `GameInputForceFeedbackEffect` class reference. Durations are in seconds, a
 magnitude is a `float` applied along every axis the motor supports or a
 per-axis `Dictionary`, and bad keys or values fail the call with a warning
-that gives the reason. An effect is released by `release()`, when its last
+that gives the reason. Conditions follow the GDK's signs: negative
+coefficients resist the player, so a spring created with only its `kind`
+pulls the wheel back to centre, and `max_negative_magnitude` is negative
+(for example `-0.5`). An effect is released by `release()`, when its last
 reference goes away, when its device disconnects and at shutdown.
 `set_force_feedback_motor_gain()` and `is_force_feedback_motor_powered_on()`
 work on the motor itself.

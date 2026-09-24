@@ -131,9 +131,20 @@ func test_condition_effect_round_trip() -> void:
 	assert_eq_approx(p["positive_coefficient"], -1.0, "coefficients clamp to -1..1")
 	assert_eq_approx(p["negative_coefficient"], 0.5, "negative coefficient")
 	assert_eq_approx(p["max_positive_magnitude"], 0.75, "max positive")
-	assert_eq_approx(p["max_negative_magnitude"], 1.0, "max negative default")
+	assert_eq_approx(p["max_negative_magnitude"], -1.0, "the negative cap defaults to full force that way")
 	assert_eq_approx(p["dead_zone"], 0.1, "dead zone")
 	assert_eq_approx(p["bias"], -0.2, "bias")
+	# The GDK SimpleFFBWheel sample passes the negative cap as a negative value.
+	var capped = _pad.create_force_feedback_effect(1, {
+		"kind": _fx("EFFECT_DAMPER"), "max_positive_magnitude": 0.25,
+		"max_negative_magnitude": -0.25,
+	})
+	assert_not_null(capped, "a signed negative cap is accepted")
+	if capped != null:
+		assert_eq_approx(capped.get_params()["max_negative_magnitude"], -0.25,
+				"a negative cap round-trips with its sign")
+		assert_true(capped.set_params({"max_negative_magnitude": -3.0}), "an update past -1 is accepted")
+		assert_eq_approx(capped.get_params()["max_negative_magnitude"], -1.0, "and clamps to -1")
 
 
 func test_every_kind_can_be_created() -> void:
@@ -152,7 +163,11 @@ func test_every_kind_can_be_created() -> void:
 		if kind <= _fx("EFFECT_SAWTOOTH_DOWN"):
 			assert_eq(p["sustain_duration"], -1.0, "kind %d sustains forever by default" % kind)
 		else:
-			assert_eq_approx(p["positive_coefficient"], 1.0, "kind %d coefficient default" % kind)
+			# Learn: negative coefficients counter the player's motion.
+			assert_eq_approx(p["positive_coefficient"], -1.0, "kind %d resists to the right by default" % kind)
+			assert_eq_approx(p["negative_coefficient"], -1.0, "kind %d resists to the left by default" % kind)
+			assert_eq_approx(p["max_positive_magnitude"], 1.0, "kind %d positive cap default" % kind)
+			assert_eq_approx(p["max_negative_magnitude"], -1.0, "kind %d negative cap default" % kind)
 	assert_eq(_gi._test_get_effect_count(), 11, "eleven live effects while referenced")
 	live.clear()
 	assert_eq(_gi._test_get_effect_count(), 0, "dropping the references releases them all")
@@ -173,6 +188,14 @@ func test_validation_warnings() -> void:
 		[0, {"kind": _fx("EFFECT_SINE_WAVE"), "frequency": -1.0}, "'frequency' must be >= 0"],
 		[0, {"kind": _fx("EFFECT_CONSTANT"), "magnitude": INF}, "'magnitude' must be finite"],
 		[0, {"kind": _fx("EFFECT_CONSTANT"), "attack_gain": NAN}, "'attack_gain' must be finite"],
+		# Finite as a double but infinite as the float GameInput takes.
+		[1, {"kind": _fx("EFFECT_CONSTANT"), "magnitude": 1e300}, "'magnitude' must be finite and within the 32-bit float range"],
+		[1, {"kind": _fx("EFFECT_CONSTANT"), "magnitude": {"linear_x": -1e300}}, "axis 'linear_x' in 'magnitude' must be finite"],
+		[1, {"kind": _fx("EFFECT_SINE_WAVE"), "frequency": 1e300}, "'frequency' must be finite"],
+		[1, {"kind": _fx("EFFECT_SINE_WAVE"), "phase": -1e39}, "'phase' must be finite"],
+		# A cap of the wrong sign would clamp to 0 and remove all force that way.
+		[1, {"kind": _fx("EFFECT_SPRING"), "max_negative_magnitude": 0.5}, "'max_negative_magnitude' must be in [-1.0, 0.0]"],
+		[1, {"kind": _fx("EFFECT_SPRING"), "max_positive_magnitude": -0.5}, "'max_positive_magnitude' must be in [0.0, 1.0]"],
 		[0, {"kind": _fx("EFFECT_CONSTANT"), "attack_duration": -1.0}, "'attack_duration' must be >= 0 seconds"],
 		[0, {"kind": _fx("EFFECT_CONSTANT"), "play_count": 1.5}, "'play_count' must be a whole number >= 0"],
 		[0, {"kind": _fx("EFFECT_CONSTANT"), "magnitude": {"linear_w": 1.0}}, "unknown axis 'linear_w' in 'magnitude'"],

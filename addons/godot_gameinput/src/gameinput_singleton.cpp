@@ -17,6 +17,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <thread>
 #include <type_traits>
 
@@ -139,6 +140,15 @@ float clamp_signed(float v) {
     if (std::isnan(v)) return 0.0f;
     return std::max(-1.0f, std::min(1.0f, v));
 }
+
+// GameInput takes 32-bit floats, and a finite double beyond their range has no
+// float value (MSVC turns it into infinity), so such numbers are rejected like
+// non-finite ones.
+bool fits_float(double v) {
+    return std::isfinite(v) && std::fabs(v) <= (double)std::numeric_limits<float>::max();
+}
+
+constexpr const char *kFiniteFloat = "must be finite and within the 32-bit float range";
 
 String hresult_to_string(HRESULT hr) {
     char buf[16];
@@ -283,10 +293,14 @@ GameInputForceFeedbackParams default_ffb_params(int kind) {
         periodic->frequency = 1.0f;
     }
     if (GameInputForceFeedbackConditionParams *condition = condition_of(p)) {
-        condition->positiveCoefficient = 1.0f;
-        condition->negativeCoefficient = 1.0f;
+        // A condition resists the player by default: negative coefficients
+        // push back toward the logical centre (positive ones would push away
+        // from it), and each cap carries the sign of its direction, as in the
+        // GDK's SimpleFFBWheel sample.
+        condition->positiveCoefficient = -1.0f;
+        condition->negativeCoefficient = -1.0f;
         condition->maxPositiveMagnitude = 1.0f;
-        condition->maxNegativeMagnitude = 1.0f;
+        condition->maxNegativeMagnitude = -1.0f;
     }
     return p;
 }
@@ -329,6 +343,20 @@ public:
         double v = 0.0;
         if (!_fetch(key, v)) return;
         inout = (float)std::max((double)lo, std::min((double)hi, v));
+    }
+
+    // The cap on force in one direction. Its sign is its direction, so a value
+    // of the other sign is an error: clamping it to 0 would silently remove
+    // all force that way.
+    void cap(const char *key, float &inout, bool negative_direction) {
+        double v = 0.0;
+        if (!_fetch(key, v)) return;
+        if (negative_direction ? v > 0.0 : v < 0.0) {
+            _fail(String("'") + key +
+                  (negative_direction ? "' must be in [-1.0, 0.0]" : "' must be in [0.0, 1.0]"));
+            return;
+        }
+        inout = (float)std::max(-1.0, std::min(1.0, v));
     }
 
     void unbounded(const char *key, float &inout) {
@@ -378,8 +406,8 @@ public:
         Variant v = m_d[key];
         if (v.get_type() == Variant::INT || v.get_type() == Variant::FLOAT) {
             double x = (double)v;
-            if (!std::isfinite(x)) {
-                _fail(String("'") + key + "' must be finite");
+            if (!fits_float(x)) {
+                _fail(String("'") + key + "' " + kFiniteFloat);
                 return;
             }
             float m = clamp_signed((float)x);
@@ -420,8 +448,8 @@ public:
                 return;
             }
             double x = (double)av;
-            if (!std::isfinite(x)) {
-                _fail(String("axis '") + axis + "' in '" + key + "' must be finite");
+            if (!fits_float(x)) {
+                _fail(String("axis '") + axis + "' in '" + key + "' " + kFiniteFloat);
                 return;
             }
             *slot = clamp_signed((float)x);
@@ -462,8 +490,8 @@ private:
             return false;
         }
         out = (double)v;
-        if (!std::isfinite(out)) {
-            _fail(String("'") + key + "' must be finite");
+        if (!fits_float(out)) {
+            _fail(String("'") + key + "' " + kFiniteFloat);
             return false;
         }
         return true;
@@ -535,8 +563,8 @@ bool parse_ffb_params(const Dictionary &d, uint32_t motor_axes, int fixed_kind,
         r.magnitude("magnitude", condition->magnitude);
         r.number("positive_coefficient", condition->positiveCoefficient, -1.0f, 1.0f);
         r.number("negative_coefficient", condition->negativeCoefficient, -1.0f, 1.0f);
-        r.number("max_positive_magnitude", condition->maxPositiveMagnitude, 0.0f, 1.0f);
-        r.number("max_negative_magnitude", condition->maxNegativeMagnitude, 0.0f, 1.0f);
+        r.cap("max_positive_magnitude", condition->maxPositiveMagnitude, false);
+        r.cap("max_negative_magnitude", condition->maxNegativeMagnitude, true);
         r.number("dead_zone", condition->deadZone, 0.0f, 1.0f);
         r.number("bias", condition->bias, -1.0f, 1.0f);
     }
@@ -695,7 +723,7 @@ float dict_float(const Dictionary &d, const char *key, float fallback) {
     Variant v = d[key];
     if (!variant_is_number(v)) return fallback;
     double x = (double)v;
-    return std::isfinite(x) ? (float)x : fallback;
+    return fits_float(x) ? (float)x : fallback;
 }
 
 int64_t dict_int(const Dictionary &d, const char *key, int64_t fallback) {
