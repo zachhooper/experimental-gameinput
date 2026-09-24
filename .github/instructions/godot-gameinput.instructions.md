@@ -112,6 +112,15 @@ applyTo: "addons/godot_gameinput/**, addons/godot_gameinput_csharp/**, tests/god
   shadow `<GameInput.h>` and break the build with hundreds of cryptic
   errors. The singleton header is named `gameinput_singleton.h` for that
   reason. Keep new file names disambiguated.
+- Code must build against both GameInput headers the repo can pick: the
+  vcpkg port (3.3.195 at the current baseline) and the NuGet pinned for
+  `GAMEINPUT_SOURCE=nuget` (`installed-gdk` presets, 3.1.26100.6879). The
+  pinned header declares the `GAMEINPUT_HAPTIC_LOCATION_*` GUIDs with
+  `DEFINE_GUID` and `GameInput.lib` does not define them, so naming them
+  fails to link there (LNK2001). Use the copies in `gameinput_labels.h`. To
+  check, configure a separate build with
+  `cmake --preset gameinput-only -B build/gi-nuget-check -DGAMEINPUT_SOURCE=nuget -DGDK_BUILD_TESTS=OFF`
+  and build its `godot_gameinput` target.
 - Register new native classes in
   `addons\godot_gameinput\src\register_types.cpp`. Add new
   implementation files to the `_GAMEINPUT_SRCS` list in

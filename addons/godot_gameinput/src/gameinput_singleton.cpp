@@ -156,10 +156,6 @@ String guid_to_string(const GUID &g) {
     return String(buf);
 }
 
-bool guid_equal(const GUID &a, const GUID &b) {
-    return std::memcmp(&a, &b, sizeof(GUID)) == 0;
-}
-
 String version_to_string(const GameInputVersion &v) {
     return String::num_int64(v.major) + "." + String::num_int64(v.minor) + "." +
            String::num_int64(v.build) + "." + String::num_int64(v.revision);
@@ -196,12 +192,7 @@ bool app_local_id_from_string(const String &text, APP_LOCAL_DEVICE_ID &out) {
 }
 
 const char *haptic_location_name(const GUID &g) {
-    if (guid_equal(g, GAMEINPUT_HAPTIC_LOCATION_GRIP_LEFT)) return "grip_left";
-    if (guid_equal(g, GAMEINPUT_HAPTIC_LOCATION_GRIP_RIGHT)) return "grip_right";
-    if (guid_equal(g, GAMEINPUT_HAPTIC_LOCATION_TRIGGER_LEFT)) return "trigger_left";
-    if (guid_equal(g, GAMEINPUT_HAPTIC_LOCATION_TRIGGER_RIGHT)) return "trigger_right";
-    if (guid_equal(g, GAMEINPUT_HAPTIC_LOCATION_NONE)) return "none";
-    return "unknown";
+    return gameinput_internal::haptic_location_name(g.Data1, g.Data2, g.Data3, g.Data4);
 }
 
 // --- Force feedback parameter schema ---------------------------------------

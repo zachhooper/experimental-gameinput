@@ -118,3 +118,22 @@ TEST_CASE("label_name follows the GameInputLabel numbering") {
     CHECK(std::strcmp(gi::label_name(124), "paddle_right_2") == 0);
     CHECK(std::strcmp(gi::label_name(125), "unknown") == 0);
 }
+
+TEST_CASE("haptic_location_name follows the GameInput location GUIDs") {
+    // GAMEINPUT_HAPTIC_LOCATION_* in gameinput.h (Microsoft.GameInput 3.5.274).
+    const uint8_t none[8] = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+    const uint8_t grip_left[8] = { 0xa8, 0x4a, 0xdf, 0xe0, 0x85, 0x12, 0x0a, 0x92 };
+    const uint8_t grip_right[8] = { 0x86, 0x90, 0xb6, 0xd4, 0x11, 0x26, 0xdf, 0xc1 };
+    const uint8_t trigger_left[8] = { 0x86, 0xe5, 0x17, 0x24, 0xcc, 0x07, 0xc6, 0xbc };
+    const uint8_t trigger_right[8] = { 0x8b, 0x0f, 0x55, 0x5a, 0x2d, 0x92, 0xa2, 0x20 };
+    CHECK(std::strcmp(gi::haptic_location_name(0x00000000, 0x0000, 0x0000, none), "none") == 0);
+    CHECK(std::strcmp(gi::haptic_location_name(0x08c707c2, 0x66bb, 0x406c, grip_left), "grip_left") == 0);
+    CHECK(std::strcmp(gi::haptic_location_name(0x155a0b77, 0x8bb2, 0x40db, grip_right), "grip_right") == 0);
+    CHECK(std::strcmp(gi::haptic_location_name(0x8de4d896, 0x5559, 0x4081, trigger_left), "trigger_left") == 0);
+    CHECK(std::strcmp(gi::haptic_location_name(0xff0cb557, 0x3af5, 0x406b, trigger_right), "trigger_right") == 0);
+    // Any other field value is a different GUID.
+    const uint8_t last_byte_off[8] = { 0xa8, 0x4a, 0xdf, 0xe0, 0x85, 0x12, 0x0a, 0x93 };
+    CHECK(std::strcmp(gi::haptic_location_name(0x08c707c2, 0x66bb, 0x406c, last_byte_off), "unknown") == 0);
+    CHECK(std::strcmp(gi::haptic_location_name(0x08c707c2, 0x66bb, 0x406d, grip_left), "unknown") == 0);
+    CHECK(std::strcmp(gi::haptic_location_name(0x08c707c3, 0x66bb, 0x406c, grip_left), "unknown") == 0);
+}

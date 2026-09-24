@@ -139,6 +139,46 @@ inline const char *label_name(int32_t label) {
     }
 }
 
+// GAMEINPUT_HAPTIC_LOCATION_* from gameinput.h, as GUID fields. The values
+// are copied rather than named: the Microsoft.GameInput 3.1.26100.6879
+// header (the NuGet pinned for GAMEINPUT_SOURCE=nuget) declares them with
+// DEFINE_GUID and GameInput.lib does not define them, so code that names
+// them does not link on that path. Later headers declare the same values
+// as constexpr GUIDs.
+struct HapticLocationGuid {
+    uint32_t data1;
+    uint16_t data2;
+    uint16_t data3;
+    uint8_t data4[8];
+    const char *name;
+};
+
+inline constexpr HapticLocationGuid kHapticLocations[] = {
+    { 0x00000000, 0x0000, 0x0000, { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, "none" },
+    { 0x08c707c2, 0x66bb, 0x406c, { 0xa8, 0x4a, 0xdf, 0xe0, 0x85, 0x12, 0x0a, 0x92 }, "grip_left" },
+    { 0x155a0b77, 0x8bb2, 0x40db, { 0x86, 0x90, 0xb6, 0xd4, 0x11, 0x26, 0xdf, 0xc1 }, "grip_right" },
+    { 0x8de4d896, 0x5559, 0x4081, { 0x86, 0xe5, 0x17, 0x24, 0xcc, 0x07, 0xc6, 0xbc }, "trigger_left" },
+    { 0xff0cb557, 0x3af5, 0x406b, { 0x8b, 0x0f, 0x55, 0x5a, 0x2d, 0x92, 0xa2, 0x20 }, "trigger_right" },
+};
+
+// Name for a GameInputHapticInfo location GUID, given its fields:
+// "grip_left", "trigger_right", ... or "unknown".
+inline const char *haptic_location_name(uint32_t data1, uint16_t data2, uint16_t data3,
+        const uint8_t data4[8]) {
+    for (const HapticLocationGuid &loc : kHapticLocations) {
+        if (loc.data1 != data1 || loc.data2 != data2 || loc.data3 != data3) continue;
+        bool same = true;
+        for (int i = 0; i < 8; ++i) {
+            if (loc.data4[i] != data4[i]) {
+                same = false;
+                break;
+            }
+        }
+        if (same) return loc.name;
+    }
+    return "unknown";
+}
+
 } // namespace gameinput_internal
 
 #endif // GODOT_GAMEINPUT_LABELS_H
