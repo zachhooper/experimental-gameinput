@@ -255,6 +255,35 @@ func test_gamepad_bindings_ignore_other_kinds() -> void:
 	assert_false(Input.is_action_pressed(jump), "gamepad sources read as up on a wheel")
 
 
+func test_mask_zero_keeps_an_unbound_mapper_idle() -> void:
+	# The per-player pattern in docs/tutorials/gameinput-action-bridge.md
+	# Step 5 relies on each of these.
+	_gi = begin_mock_session()
+	if _gi == null:
+		return
+	var jump := &"test_gi_v2_idle_jump"
+	_action(jump)
+	if _new_mapper([_binding(jump, _d("SRC_BTN_A"))]) == null:
+		return
+	_mapper.set("target_kind_mask", 0)
+	var pad = add_mock_device(_gi, {"kind_mask": _k("DEVICE_GAMEPAD")})
+	push_mock_reading(_gi, pad, {"gamepad": {"buttons": _d("BUTTON_A")}})
+	_tick()
+	assert_false(Input.is_action_pressed(jump), "a mask of 0 with id -1 follows no pad")
+	assert_eq(_mapper.get_active_binding_count(), 0, "nothing held while idle")
+	assert_null(_gi.get_device_by_id(-1), "id -1 resolves to no device, so the slot reads as free")
+	_mapper.set("target_device_id", pad.get_device_id())
+	push_mock_reading(_gi, pad, {"gamepad": {"buttons": _d("BUTTON_A")}})
+	_tick()
+	assert_true(Input.is_action_pressed(jump), "pinning the id drives the mapper whatever the mask")
+	var stale: int = pad.get_device_id()
+	_gi._test_remove_device(stale)
+	_gi._test_force_poll()
+	_tick()
+	assert_false(Input.is_action_pressed(jump), "the pinned pad disconnecting releases the action")
+	assert_null(_gi.get_device_by_id(stale), "a disconnected id resolves to no device, so the slot reads as free")
+
+
 func test_specialty_sources_are_never_suppressed() -> void:
 	# Godot has no standard joypad mapping for arcade stick, flight stick or
 	# racing wheel controls, so the mapper keeps its own events for them even

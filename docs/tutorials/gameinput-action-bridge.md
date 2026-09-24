@@ -208,6 +208,9 @@ const SPEED := 200.0
 const JUMP_VELOCITY := -400.0
 
 func _physics_process(delta: float) -> void:
+    if not is_on_floor():
+        velocity += get_gravity() * delta
+
     var direction := Input.get_action_strength("move_right") - Input.get_action_strength("move_left")
     velocity.x = direction * SPEED
 
@@ -230,8 +233,11 @@ insertion order, so a controller plugged in mid-game is picked up
 automatically.
 
 For split-screen or per-player binding you need to pin each mapper
-to a specific device id when its owner connects. Listen to
-`GameInput.device_connected`:
+to a specific device id when its owner connects. Until then a
+mapper has to stay idle: with `target_device_id = -1` it would follow
+the primary pad, and every player would move with player 1's
+controller. A `target_kind_mask` of `0` matches no device, so it
+keeps an unbound mapper idle. Listen to `GameInput.device_connected`:
 
 ```gdscript
 extends Node
@@ -239,6 +245,9 @@ extends Node
 @export var _mappers: Array[GameInputMapper] = []
 
 func _ready() -> void:
+    # Idle until a pad is bound: a mask of 0 matches no device.
+    for mapper in _mappers:
+        mapper.target_kind_mask = 0
     GameInput.device_connected.connect(_on_device_connected)
     GameInput.device_disconnected.connect(_on_device_disconnected)
 
@@ -248,18 +257,24 @@ func _ready() -> void:
 
 func _on_device_connected(device: GameInputDevice) -> void:
     print("[Pad] connected: id=%d (%s)" % [device.get_device_id(), device.get_display_name()])
-    _bind_device(device)
+    # Keyboards, mice and other kinds connect too; only pads get a player.
+    if device.get_kind_mask() & GameInput.DEVICE_GAMEPAD:
+        _bind_device(device)
 
 func _on_device_disconnected(device_id: int) -> void:
+    # Keep the id. A mapper whose device is gone releases its actions and
+    # reads nothing, and its slot goes to the next pad that connects.
     print("[Pad] disconnected: id=%d" % device_id)
-    for mapper in _mappers:
-        if mapper.target_device_id == device_id:
-            mapper.target_device_id = -1  # fall back to primary
 
 func _bind_device(device: GameInputDevice) -> void:
+    var id := device.get_device_id()
     for mapper in _mappers:
-        if mapper.target_device_id == -1:
-            mapper.target_device_id = device.get_device_id()
+        if mapper.target_device_id == id:
+            return  # already bound
+    # The first slot that was never bound or whose pad has gone.
+    for mapper in _mappers:
+        if GameInput.get_device_by_id(mapper.target_device_id) == null:
+            mapper.target_device_id = id
             return
 ```
 
@@ -269,7 +284,8 @@ the device wrapper is safe to use from your handler.
 
 Device ids are session-local and never recycled, so storing the id
 of "player 1's pad" in a dictionary is safe for the entire
-process lifetime.
+process lifetime. A pad that is unplugged and plugged back in gets
+a new id and takes the first free slot.
 
 ## Step 6 — (Optional) Sanity-check the runtime
 
@@ -311,6 +327,9 @@ const JUMP_RUMBLE_STRONG := 0.4
 const JUMP_RUMBLE_SEC := 0.12
 
 func _physics_process(delta: float) -> void:
+    if not is_on_floor():
+        velocity += get_gravity() * delta
+
     var direction := Input.get_action_strength("move_right") - Input.get_action_strength("move_left")
     velocity.x = direction * SPEED
 
@@ -417,9 +436,12 @@ A C# version lives in
   [GameInput addon doc](../gameinput/plugin.md) covers every input
   kind, force feedback, and event-driven readings that catch taps
   shorter than a frame.
-- **Per-player binding for split-screen.** The hot-plug handler in
-  Step 5 is the starting point — extend it to pin specific device
-  ids to per-player `GameInputMapper` nodes.
+- **Give a reconnected pad back to its player.** Step 5 hands each
+  newly connected pad the first free slot, and a pad that reconnects
+  gets a new device id. To return it to the player who had it,
+  remember each player's `device.get_app_local_id()`, which stays
+  the same when the pad reconnects through the same port, and match
+  on it in `_bind_device` before falling back to the first free slot.
 - **Wire GameInput into a signed-in XBOX session.** If you also
   built through the main cumulative chain (signs in, lobbies,
   Party, MPA), the [capstone integration tech demo](integrated/02-tech-demo.md)

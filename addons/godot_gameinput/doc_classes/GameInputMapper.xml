@@ -63,7 +63,7 @@
 			The [GameInputActionMap] this mapper iterates each frame. When [code]null[/code] the mapper is a no-op.
 		</member>
 		<member name="target_kind_mask" type="int" setter="set_target_kind_mask" getter="get_target_kind_mask" default="1">
-			Bitfield of [enum KindFlags] values used to pick the primary device when [member target_device_id] is [code]-1[/code]. Defaults to [constant KIND_GAMEPAD]. Despite its enum, the field accepts an OR-ed combination so a mapper can be retargeted at, for example, [code]KIND_GAMEPAD | KIND_RACING_WHEEL[/code]; the first connected device matching any of the flags is used.
+			Bitfield of [enum KindFlags] values used to pick the primary device when [member target_device_id] is [code]-1[/code]. Defaults to [constant KIND_GAMEPAD]. Despite its enum, the field accepts an OR-ed combination so a mapper can be retargeted at, for example, [code]KIND_GAMEPAD | KIND_RACING_WHEEL[/code]; the first connected device matching any of the flags is used. A mask of [code]0[/code] matches no device, which leaves the mapper idle until [member target_device_id] is set.
 		</member>
 		<member name="target_device_id" type="int" setter="set_target_device_id" getter="get_target_device_id" default="-1">
 			Specific [GameInputDevice] id to drive, or [code]-1[/code] (the default) to use the primary device matching [member target_kind_mask]. The id is looked up whatever the device's kind. Use this for split-screen / per-player mapper instances by storing the id reported by [signal GameInput.device_connected].
