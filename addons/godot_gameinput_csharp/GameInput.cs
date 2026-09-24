@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using Godot;
 
 namespace GodotGameInput;
@@ -12,8 +13,9 @@ namespace GodotGameInput;
 /// </summary>
 public static class GameInput
 {
-    private static GodotObject _singleton;
-    private static bool _signalsConnected;
+    // Published only after its signals are connected; see Singleton.
+    private static volatile GodotObject _singleton;
+    private static readonly object SingletonLock = new();
 
     /// <summary>
     /// Device-kind bit flags, matching native <c>GameInput.DeviceKind</c>.
@@ -115,18 +117,33 @@ public static class GameInput
     {
         get
         {
-            if (_singleton != null && GodotObject.IsInstanceValid(_singleton))
+            GodotObject current = _singleton;
+            if (current != null && GodotObject.IsInstanceValid(current))
             {
-                return _singleton;
+                return current;
             }
 
-            // Re-resolving: the previous singleton is gone (first access or an
-            // extension/editor reload). Clear the connected flag so the new
-            // singleton's device signals get reconnected below.
-            _signalsConnected = false;
-            _singleton = ResolveSingleton();
-            EnsureSignalsConnected();
-            return _singleton;
+            // Re-resolving: first access, or the previous singleton is gone (an
+            // extension or editor reload). The lock stops two threads from both
+            // connecting the new singleton's signals, which would raise every
+            // event twice.
+            lock (SingletonLock)
+            {
+                current = _singleton;
+                if (current != null && GodotObject.IsInstanceValid(current))
+                {
+                    return current;
+                }
+
+                GodotObject resolved = ResolveSingleton();
+                if (resolved != null)
+                {
+                    ConnectSignals(resolved);
+                }
+
+                _singleton = resolved;
+                return resolved;
+            }
         }
     }
 
@@ -299,18 +316,51 @@ public static class GameInput
 
     private static void ConnectBridge() => _ = Singleton;
 
+    // The compiler's own add and remove for field-like events. A plain += on
+    // the backing field is a read-modify-write, so a handler added from
+    // another thread at the same moment could be lost.
+    private static void CombineHandler<T>(ref T handlers, T handler) where T : Delegate
+    {
+        T seen = Volatile.Read(ref handlers);
+        while (true)
+        {
+            T actual = Interlocked.CompareExchange(ref handlers, (T)Delegate.Combine(seen, handler), seen);
+            if (ReferenceEquals(actual, seen))
+            {
+                return;
+            }
+
+            seen = actual;
+        }
+    }
+
+    private static void RemoveHandler<T>(ref T handlers, T handler) where T : Delegate
+    {
+        T seen = Volatile.Read(ref handlers);
+        while (true)
+        {
+            T actual = Interlocked.CompareExchange(ref handlers, (T)Delegate.Remove(seen, handler), seen);
+            if (ReferenceEquals(actual, seen))
+            {
+                return;
+            }
+
+            seen = actual;
+        }
+    }
+
     /// <summary>(device) when a device connects.</summary>
     public static event Action<GameInputDevice> DeviceConnected
     {
-        add { _deviceConnected += value; ConnectBridge(); }
-        remove => _deviceConnected -= value;
+        add { CombineHandler(ref _deviceConnected, value); ConnectBridge(); }
+        remove => RemoveHandler(ref _deviceConnected, value);
     }
 
     /// <summary>(deviceId) when a device disconnects.</summary>
     public static event Action<long> DeviceDisconnected
     {
-        add { _deviceDisconnected += value; ConnectBridge(); }
-        remove => _deviceDisconnected -= value;
+        add { CombineHandler(ref _deviceDisconnected, value); ConnectBridge(); }
+        remove => RemoveHandler(ref _deviceDisconnected, value);
     }
 
     /// <summary>
@@ -321,56 +371,51 @@ public static class GameInput
     public static event Action<GameInputDevice, GameInputDevice.DeviceStatus, GameInputDevice.DeviceStatus, long>
         DeviceStatusChanged
     {
-        add { _deviceStatusChanged += value; ConnectBridge(); }
-        remove => _deviceStatusChanged -= value;
+        add { CombineHandler(ref _deviceStatusChanged, value); ConnectBridge(); }
+        remove => RemoveHandler(ref _deviceStatusChanged, value);
     }
 
     /// <summary>(device, reading) for each event-driven reading; see <see cref="SetReadingCallbackKinds"/>.</summary>
     public static event Action<GameInputDevice, GameInputReading> ReadingReceived
     {
-        add { _readingReceived += value; ConnectBridge(); }
-        remove => _readingReceived -= value;
+        add { CombineHandler(ref _readingReceived, value); ConnectBridge(); }
+        remove => RemoveHandler(ref _readingReceived, value);
     }
 
     /// <summary>(device, buttons, previousButtons, timestamp) when Guide or Share is pressed or released.</summary>
     public static event Action<GameInputDevice, GameInputDevice.SystemButton, GameInputDevice.SystemButton, long>
         SystemButtonsChanged
     {
-        add { _systemButtonsChanged += value; ConnectBridge(); }
-        remove => _systemButtonsChanged -= value;
+        add { CombineHandler(ref _systemButtonsChanged, value); ConnectBridge(); }
+        remove => RemoveHandler(ref _systemButtonsChanged, value);
     }
 
     /// <summary>(device, layout, previousLayout, timestamp) when a keyboard's layout changes.</summary>
     public static event Action<GameInputDevice, long, long, long> KeyboardLayoutChanged
     {
-        add { _keyboardLayoutChanged += value; ConnectBridge(); }
-        remove => _keyboardLayoutChanged -= value;
+        add { CombineHandler(ref _keyboardLayoutChanged, value); ConnectBridge(); }
+        remove => RemoveHandler(ref _keyboardLayoutChanged, value);
     }
 
-    private static void EnsureSignalsConnected()
+    // Called once per resolved singleton, under SingletonLock.
+    private static void ConnectSignals(GodotObject singleton)
     {
-        if (_signalsConnected || _singleton == null)
-        {
-            return;
-        }
-
-        _signalsConnected = true;
-        _singleton.Connect("device_connected",
+        singleton.Connect("device_connected",
             Callable.From((GodotObject device) => _deviceConnected?.Invoke(GameInputDevice.From(device))));
-        _singleton.Connect("device_disconnected",
+        singleton.Connect("device_disconnected",
             Callable.From((long deviceId) => _deviceDisconnected?.Invoke(deviceId)));
-        _singleton.Connect("device_status_changed",
+        singleton.Connect("device_status_changed",
             Callable.From((GodotObject device, long status, long previous, long timestamp) =>
                 _deviceStatusChanged?.Invoke(GameInputDevice.From(device), (GameInputDevice.DeviceStatus)status,
                     (GameInputDevice.DeviceStatus)previous, timestamp)));
-        _singleton.Connect("reading_received",
+        singleton.Connect("reading_received",
             Callable.From((GodotObject device, GodotObject reading) =>
                 _readingReceived?.Invoke(GameInputDevice.From(device), GameInputReading.From(reading))));
-        _singleton.Connect("system_buttons_changed",
+        singleton.Connect("system_buttons_changed",
             Callable.From((GodotObject device, long buttons, long previous, long timestamp) =>
                 _systemButtonsChanged?.Invoke(GameInputDevice.From(device), (GameInputDevice.SystemButton)buttons,
                     (GameInputDevice.SystemButton)previous, timestamp)));
-        _singleton.Connect("keyboard_layout_changed",
+        singleton.Connect("keyboard_layout_changed",
             Callable.From((GodotObject device, long layout, long previous, long timestamp) =>
                 _keyboardLayoutChanged?.Invoke(GameInputDevice.From(device), layout, previous, timestamp)));
     }

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Threading;
 using System.Xml.Linq;
 using Xunit;
 
@@ -71,6 +72,70 @@ public class GameInputParityTests
         Assert.True(silent.Length == 0,
             $"GameInput event(s) {string.Join(", ", silent)} do not connect the native signals when a handler "
             + "is added; give each an add accessor that resolves the singleton.");
+    }
+
+    private delegate void HandlerUpdate(ref Action handlers, Action handler);
+
+    // The add and remove accessors share these helpers. Subscribers on several
+    // threads at once must not lose a handler, as with a field-like event.
+    [Fact]
+    public void EventHandlersAddedAndRemovedAcrossThreadsAreAllKept()
+    {
+        HandlerUpdate combine = HandlerHelper("CombineHandler");
+        HandlerUpdate remove = HandlerHelper("RemoveHandler");
+        const int Threads = 8;
+        const int PerThread = 400;
+        Action[][] handlers = Enumerable.Range(0, Threads)
+            .Select(t => Enumerable.Range(0, PerThread)
+                .Select(i => (Action)(() => GC.KeepAlive(t * PerThread + i)))
+                .ToArray())
+            .ToArray();
+
+        Action shared = null;
+        RunTogether(Threads, t =>
+        {
+            foreach (Action handler in handlers[t])
+            {
+                combine(ref shared, handler);
+            }
+        });
+        Assert.Equal(Threads * PerThread, shared?.GetInvocationList().Length ?? 0);
+
+        RunTogether(Threads, t =>
+        {
+            foreach (Action handler in handlers[t])
+            {
+                remove(ref shared, handler);
+            }
+        });
+        Assert.Null(shared);
+    }
+
+    private static HandlerUpdate HandlerHelper(string name) =>
+        typeof(GodotGameInput.GameInput)
+            .GetMethod(name, BindingFlags.NonPublic | BindingFlags.Static)
+            .MakeGenericMethod(typeof(Action))
+            .CreateDelegate<HandlerUpdate>();
+
+    private static void RunTogether(int threads, Action<int> body)
+    {
+        using var start = new Barrier(threads);
+        Thread[] workers = Enumerable.Range(0, threads)
+            .Select(t => new Thread(() =>
+            {
+                start.SignalAndWait();
+                body(t);
+            }))
+            .ToArray();
+        foreach (Thread worker in workers)
+        {
+            worker.Start();
+        }
+
+        foreach (Thread worker in workers)
+        {
+            worker.Join();
+        }
     }
 
     private static bool Calls(MethodInfo method, params string[] names)
