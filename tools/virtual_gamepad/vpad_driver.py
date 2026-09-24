@@ -24,7 +24,11 @@ Choreography, repeated every second while running: A held for 0.3 s, then
 the left stick pushed fully right from 0.4 s to 0.7 s, otherwise at rest.
 
 Exit codes: 0 stopped cleanly, 2 vgamepad could not be imported, 3 the
-virtual pad could not be created (ViGEmBus missing or not running).
+virtual pad could not be created (ViGEmBus missing or not running), 4 the
+pad failed while running or unplugging (logged as an "error" event with
+stage "run" or "teardown"). A "stop" event is logged whenever the pad was
+created, with "reason" set to "stop-file", "duration", "interrupted" or
+"error".
 """
 
 from __future__ import annotations
@@ -121,6 +125,7 @@ def run(args: argparse.Namespace, log: JsonLog) -> int:
     print("vpad_driver: virtual Xbox 360 pad plugged in", flush=True)
 
     reason = "duration"
+    failed = False
     started = time.monotonic()
     sent = None
     try:
@@ -143,14 +148,24 @@ def run(args: argparse.Namespace, log: JsonLog) -> int:
             time.sleep(TICK_SEC)
     except KeyboardInterrupt:
         reason = "interrupted"
+    except Exception as exc:  # the bus went away, or vgamepad raised mid-run
+        reason = "error"
+        failed = True
+        log.write("error", stage="run", message=f"{type(exc).__name__}: {exc}")
+        print(f"vpad_driver: failed while running ({exc})", file=sys.stderr)
     finally:
-        pad.reset()
-        pad.update()
-        pad.unregister_notification()
+        try:
+            pad.reset()
+            pad.update()
+            pad.unregister_notification()
+        except Exception as exc:
+            failed = True
+            log.write("error", stage="teardown", message=f"{type(exc).__name__}: {exc}")
+            print(f"vpad_driver: failed while unplugging ({exc})", file=sys.stderr)
         log.write("stop", reason=reason)
         del pad
     print(f"vpad_driver: stopped ({reason})", flush=True)
-    return 0
+    return 4 if failed else 0
 
 
 if __name__ == "__main__":

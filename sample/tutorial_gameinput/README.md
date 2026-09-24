@@ -130,6 +130,7 @@ Runner parameters, with the self-test flag each one passes after `--`:
 | `-TimeoutSec <n>` | `--gameinput-timeout=<n>` | Watchdog; default 120 s. |
 | `-OutDir <dir>` | `--gameinput-report=<dir>\gameinput-selftest.json` | Where the report and logs go. |
 | (automatic) | `--gameinput-session-locked` | Passed when the Windows session is locked. |
+| (automatic) | `--gameinput-run-id=<id>` | A new id for each run, copied into the report's `run_id`; the runner trusts only a report that carries it. |
 | `-Project <dir>` | | The project to run; `sample\tutorial_gameinput_csharp` runs the [C# self-test](../tutorial_gameinput_csharp/README.md). |
 | `-Godot <exe>` | | The Godot console executable. |
 
@@ -142,12 +143,13 @@ Without `--gameinput-report` the report goes to
 | --- | --- |
 | `0` | Every check passed (skips allowed unless strict). |
 | `1` | A check failed, or was skipped under strict. |
-| `2` | The harness could not run or its result cannot be trusted: an unknown `--gameinput-*` flag or an unwritable report; from the runner, also no Godot, the addon not built, a failed build, import or vpad driver, anything that threw, or Godot exiting without a report or with a code its report disagrees with (a crash on the way out). |
+| `2` | The harness could not run or its result cannot be trusted: an unknown `--gameinput-*` flag or an unwritable report; from the runner, also no Godot, the addon not built, a failed build, import or vpad driver, anything that threw, a report without this run's `run_id`, or Godot exiting without a report or with a code its report disagrees with (a crash on the way out). |
 | `3` | The watchdog expired before the checks finished; from the runner, also Godot still running 60 s after the watchdog, which the runner then kills. |
 
 ### Report
 
-`gameinput-selftest.json` (schema `gameinput-selftest/1`) records the Godot
+`gameinput-selftest.json` (schema `gameinput-selftest/1`) records the run id
+(`run_id`, empty unless `--gameinput-run-id` was passed), the Godot
 version, OS, the Windows session (name, remote, locked), the display, the
 build (debug, mock seams), the options, a summary (`pass`, `fail`, `skip`,
 `total`, `exit_code`) and one entry per check with its `id`, `group`,

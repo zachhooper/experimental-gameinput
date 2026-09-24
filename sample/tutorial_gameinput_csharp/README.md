@@ -73,7 +73,8 @@ what the facade adds on top of it, and the C# tutorial's wiring:
 
 It takes the same flags after `--` as the GDScript self-test —
 `--gameinput-report=<path>`, `--gameinput-strict`,
-`--gameinput-session-locked` and `--gameinput-timeout=<sec>` — writes the same
+`--gameinput-session-locked`, `--gameinput-timeout=<sec>` and
+`--gameinput-run-id=<id>` — writes the same
 report (schema `gameinput-selftest/1`, with `"harness": "csharp"`) and uses
 the same exit codes: `0` pass, `1` a check failed (or skipped under strict),
 `2` the harness could not run, `3` the watchdog expired. The runner adds its
