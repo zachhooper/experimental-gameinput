@@ -27,19 +27,28 @@ applyTo: "addons/godot_gameinput/**, addons/godot_gameinput_csharp/**, tests/god
   callbacks may only push events into the mutex-protected pending queue (or,
   for readings, the preallocated reading ring) and `AddRef` the native device
   pointer.
-- Every callback runs inside the callback fence: return early unless
+- Each registration hands GameInput its own `CallbackGate`
+  (`gameinput_callback_gate.h`) as the context, never `this`. A callback
+  enters its gate first and then the singleton's fence: return early unless
   `_enter_callback()` succeeds, and call `_leave_callback()` on every path
-  after it. `shutdown()` clears `m_accepting_callbacks`, unregisters, then
-  `_wait_for_callbacks()` drains `m_callbacks_in_flight` before releasing
-  anything. A new callback that skips the fence is a use-after-free at
-  shutdown.
+  after it. `shutdown()` clears `m_accepting_callbacks`, closes and
+  unregisters each registration, then `_wait_for_callbacks()` drains
+  `m_callbacks_in_flight` before releasing anything. A new callback that
+  skips the gate or the fence is a use-after-free at shutdown.
 - Unregister with `UnregisterCallback` only. Calling `StopCallback` first
   makes `UnregisterCallback` fail intermittently on the GameInput 3.3
-  runtime, and a failed unregister does not fence the callback.
-- Never forget a token whose unregister failed. `_unregister_callback()`
-  keeps it in `m_unresolved_callback_tokens`;
-  `_apply_reading_callback_registration()` retries the list and
-  `shutdown()` makes a final attempt while `m_game_input` is still alive.
+  runtime.
+- Never free a gate whose registration GameInput may still call.
+  `_unregister_callback()` closes the gate before unregistering and retries
+  once the calls already inside have left. A registration that still fails
+  goes to `m_unresolved_callbacks`, which
+  `_apply_reading_callback_registration()` retries and `shutdown()` tries a
+  last time while `m_game_input` is alive. After that it is abandoned
+  (`_abandon_callback()`): the closed gate is leaked on purpose and the
+  module is pinned, so a late call lands in mapped code and returns.
+- A reading-callback change bumps `m_reading_epoch`, and the drain drops
+  readings of an older epoch. `poll()` does not nest (`m_in_poll`), even
+  when a signal handler restarts the runtime.
 - Ring evictions mark only the device that lost the reading (`GapMark`,
   fixed table under `m_event_mutex`; past `kMaxGapMarks`, every device). Do
   not reintroduce a global overflow flag: it flags devices that lost

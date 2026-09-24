@@ -137,6 +137,18 @@ Select the keyboard in the inspector.
 - [ ] Switch the keyboard layout (Win+Space). The device events log shows
   `keyboard layout: <Name> 0x… -> 0x…`, and `keys:` still reports keys by
   position.
+- [ ] Within a second of the switch, the info line's `keyboard layout 0x…`
+  shows the new id. To check `get_device_info()` as well, add this to the
+  end of `main.gd`'s `_ready()` and switch again. Both numbers it prints
+  are the new id:
+
+  ```gdscript
+  GameInput.keyboard_layout_changed.connect(func(device, layout, _previous, _timestamp):
+      print("layout %X, device info %X" % [layout, device.get_device_info()["keyboard"]["layout"]]))
+  ```
+
+  A layout whose id is 0x80000000 or more (IME and custom layouts can be)
+  shows eight hex digits and no minus sign in both places.
 
 ### Mouse
 
@@ -168,6 +180,23 @@ With a force-feedback wheel or flight stick selected:
 - [ ] **Force feedback pulse** gives a 0.3-strength constant force for
   0.3 s, then stops.
 - [ ] **Stop** during the pulse ends it immediately.
+- [ ] On a wheel, a spring created with only its kind pulls the wheel back
+  to centre from both sides. With the wheel connected, add these lines to
+  `main.gd`. Keep the effect in a member: freeing it releases the effect.
+
+  ```gdscript
+  # At the top of the script:
+  var _spring: GameInputForceFeedbackEffect
+
+  # At the end of _ready():
+  await get_tree().create_timer(1.0).timeout
+  var wheel: GameInputDevice = GameInput.get_primary_device(GameInput.DEVICE_RACING_WHEEL)
+  _spring = wheel.create_force_feedback_effect(0, {"kind": GameInputForceFeedbackEffect.EFFECT_SPRING})
+  _spring.start()
+  ```
+
+  If it pushes the wheel away, record the device: the defaults follow the
+  signs in the GDK's SimpleFFBWheel sample.
 
 ### Haptics
 

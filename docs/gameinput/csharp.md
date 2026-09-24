@@ -127,7 +127,8 @@ during the native `poll()` — whether the GDScript bootstrap autoload, the C#
 
 Adding a handler connects the facade to the native signals, and so does any
 call through `GameInput`. A C# node that only subscribes therefore hears
-events in a project where GDScript initializes and polls GameInput.
+events in a project where GDScript initializes and polls GameInput. Handlers
+can be added and removed from any thread; they still run on the main thread.
 
 Because the events are static, a handler keeps its node reachable and keeps
 being called after the node leaves the tree. Subscribe in `_EnterTree()` and
