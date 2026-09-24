@@ -25,9 +25,33 @@ void GameInputBinding::_bind_methods() {
     ADD_PROPERTY(PropertyInfo(Variant::INT, "source", PROPERTY_HINT_ENUM,
                               "Menu:0,View:1,A:2,B:3,X:4,Y:5,DPad Up:6,DPad Down:7,"
                               "DPad Left:8,DPad Right:9,Left Shoulder:10,Right Shoulder:11,"
-                              "Left Thumb:12,Right Thumb:13,Axis Left X:100,Axis Left Y:101,"
+                              "Left Thumb:12,Right Thumb:13,C:14,Z:15,"
+                              "Left Trigger Button:16,Right Trigger Button:17,"
+                              "Left Stick Up:18,Left Stick Down:19,Left Stick Left:20,"
+                              "Left Stick Right:21,Right Stick Up:22,Right Stick Down:23,"
+                              "Right Stick Left:24,Right Stick Right:25,Paddle Left 1:26,"
+                              "Paddle Left 2:27,Paddle Right 1:28,Paddle Right 2:29,"
+                              "Axis Left X:100,Axis Left Y:101,"
                               "Axis Right X:102,Axis Right Y:103,Axis Left Trigger:104,"
-                              "Axis Right Trigger:105"),
+                              "Axis Right Trigger:105,Axis Wheel:106,Axis Throttle:107,"
+                              "Axis Brake:108,Axis Clutch:109,Axis Handbrake:110,"
+                              "Axis Flight Roll:111,Axis Flight Pitch:112,Axis Flight Yaw:113,"
+                              "Axis Flight Throttle:114,"
+                              "Arcade Menu:200,Arcade View:201,Arcade Up:202,Arcade Down:203,"
+                              "Arcade Left:204,Arcade Right:205,Arcade Action 1:206,"
+                              "Arcade Action 2:207,Arcade Action 3:208,Arcade Action 4:209,"
+                              "Arcade Action 5:210,Arcade Action 6:211,Arcade Special 1:212,"
+                              "Arcade Special 2:213,"
+                              "Flight Menu:300,Flight View:301,Flight Fire Primary:302,"
+                              "Flight Fire Secondary:303,Flight Hat Up:304,Flight Hat Down:305,"
+                              "Flight Hat Left:306,Flight Hat Right:307,Flight A:308,Flight B:309,"
+                              "Flight X:310,Flight Y:311,Flight Left Shoulder:312,"
+                              "Flight Right Shoulder:313,"
+                              "Wheel Menu:400,Wheel View:401,Wheel Previous Gear:402,"
+                              "Wheel Next Gear:403,Wheel DPad Up:404,Wheel DPad Down:405,"
+                              "Wheel DPad Left:406,Wheel DPad Right:407,Wheel A:408,Wheel B:409,"
+                              "Wheel X:410,Wheel Y:411,Wheel Left Thumb:412,"
+                              "Wheel Right Thumb:413"),
                  "set_source", "get_source");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "is_axis"), "set_is_axis", "get_is_axis");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "axis_threshold",

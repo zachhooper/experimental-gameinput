@@ -13,6 +13,8 @@ add_library(godot_gameinput SHARED
     src/gameinput_singleton.cpp
     src/gameinput_device.cpp
     src/gameinput_reading.cpp
+    src/gameinput_force_feedback_effect.cpp
+    src/gameinput_keymap.cpp
     src/gameinput_binding.cpp
     src/gameinput_action_map.cpp
     src/gameinput_mapper.cpp

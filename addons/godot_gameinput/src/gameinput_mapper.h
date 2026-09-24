@@ -46,9 +46,13 @@ class GameInputMapper : public Node {
 
 public:
     enum KindFlags {
-        KIND_GAMEPAD  = 1 << 0,
-        KIND_KEYBOARD = 1 << 1,
-        KIND_MOUSE    = 1 << 2,
+        KIND_GAMEPAD      = 1 << 0,
+        KIND_KEYBOARD     = 1 << 1,
+        KIND_MOUSE        = 1 << 2,
+        // Same bit values as GameInput.DeviceKind.
+        KIND_ARCADE_STICK = 1 << 3,
+        KIND_FLIGHT_STICK = 1 << 4,
+        KIND_RACING_WHEEL = 1 << 5,
     };
 
 private:
@@ -112,6 +116,7 @@ public:
     void _test_mark_binding_pressed(int binding_index);
     void _test_prime_native_handles_cache(int binding_index, bool native_handles);
     int _test_get_native_handles_cache_count() const;
+    bool _test_native_handles_binding(const Ref<class GameInputBinding> &binding) const;
 #endif
 };
 

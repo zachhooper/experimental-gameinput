@@ -8,6 +8,7 @@
 #   main.cpp              — lone TU defining DOCTEST_CONFIG_IMPLEMENT
 #   result_codes/         — pure HRESULT formatting helper coverage
 #   request_key/          — pure PlayFab request key-match helper coverage (Phase 2)
+#   gameinput/            — pure godot_gameinput helpers (snapshot, queues, keymap, labels)
 #   fuzz/                 — libFuzzer fuzz targets, guarded by GDK_BUILD_FUZZ_TARGETS
 #   fuzz_harness/         — GDExtension stub harness (Phase 3), linked by fuzz targets
 #   third_party/doctest/  — vendored upstream header (do not modify)
@@ -22,6 +23,9 @@ if(GDK_BUILD_TESTS)
     # ("C++ test scope rules") for the contract under test.
     set(_GDK_RC_SRC "${CMAKE_SOURCE_DIR}/addons/godot_gdk/src")
     set(_PF_RC_SRC  "${CMAKE_SOURCE_DIR}/addons/godot_playfab/src")
+    # godot_gameinput's pure helpers (snapshot rules, event queues, keyboard
+    # tables, label names) have no GameInput or runtime dependency.
+    set(_GI_SRC     "${CMAKE_SOURCE_DIR}/addons/godot_gameinput/src")
 
     godot_addon_doctest_target(
         TARGET_NAME gdk_unit_tests
@@ -30,14 +34,19 @@ if(GDK_BUILD_TESTS)
             "${CMAKE_CURRENT_SOURCE_DIR}/result_codes/test_gdk_result_codes.cpp"
             "${CMAKE_CURRENT_SOURCE_DIR}/result_codes/test_playfab_result_codes.cpp"
             "${CMAKE_CURRENT_SOURCE_DIR}/request_key/test_playfab_request_key.cpp"
+            "${CMAKE_CURRENT_SOURCE_DIR}/gameinput/test_gameinput_snapshot.cpp"
+            "${CMAKE_CURRENT_SOURCE_DIR}/gameinput/test_gameinput_event_queue.cpp"
+            "${CMAKE_CURRENT_SOURCE_DIR}/gameinput/test_gameinput_keymap.cpp"
             "${_GDK_RC_SRC}/xbox_result_codes_internal.cpp"
             "${_PF_RC_SRC}/playfab_result_codes_internal.cpp"
             "${_PF_RC_SRC}/playfab_request_key.cpp"
+            "${_GI_SRC}/gameinput_keymap.cpp"
         LINK_LIBS   godot::cpp
         INCLUDES
             "${CMAKE_CURRENT_SOURCE_DIR}"
             "${_GDK_RC_SRC}"
             "${_PF_RC_SRC}"
+            "${_GI_SRC}"
     )
 endif()
 

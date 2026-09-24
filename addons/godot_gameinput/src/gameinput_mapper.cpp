@@ -50,13 +50,16 @@ void GameInputMapper::_bind_methods() {
                          &GameInputMapper::_test_prime_native_handles_cache);
     ClassDB::bind_method(D_METHOD("_test_get_native_handles_cache_count"),
                          &GameInputMapper::_test_get_native_handles_cache_count);
+    ClassDB::bind_method(D_METHOD("_test_native_handles_binding", "binding"),
+                         &GameInputMapper::_test_native_handles_binding);
 #endif
 
     ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "action_map",
                               PROPERTY_HINT_RESOURCE_TYPE, "GameInputActionMap"),
                  "set_action_map", "get_action_map");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "target_kind_mask",
-                              PROPERTY_HINT_FLAGS, "Gamepad,Keyboard,Mouse"),
+                              PROPERTY_HINT_FLAGS,
+                              "Gamepad,Keyboard,Mouse,Arcade Stick,Flight Stick,Racing Wheel"),
                  "set_target_kind_mask", "get_target_kind_mask");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "target_device_id"),
                  "set_target_device_id", "get_target_device_id");
@@ -64,6 +67,9 @@ void GameInputMapper::_bind_methods() {
     BIND_ENUM_CONSTANT(KIND_GAMEPAD);
     BIND_ENUM_CONSTANT(KIND_KEYBOARD);
     BIND_ENUM_CONSTANT(KIND_MOUSE);
+    BIND_ENUM_CONSTANT(KIND_ARCADE_STICK);
+    BIND_ENUM_CONSTANT(KIND_FLIGHT_STICK);
+    BIND_ENUM_CONSTANT(KIND_RACING_WHEEL);
 }
 
 void GameInputMapper::_notification(int p_what) {
@@ -145,6 +151,13 @@ void GameInputMapper::_test_prime_native_handles_cache(int binding_index, bool n
 
 int GameInputMapper::_test_get_native_handles_cache_count() const {
     return (int)m_native_handles_cache.size();
+}
+
+bool GameInputMapper::_test_native_handles_binding(const Ref<GameInputBinding> &binding) const {
+    if (binding.is_null()) {
+        return false;
+    }
+    return _native_path_handles_binding(binding, binding->get_action());
 }
 #endif
 
@@ -239,44 +252,18 @@ bool GameInputMapper::_is_pressed_for(int source, float &out_strength,
         return false;
     }
 
-    // Buttons: SRC_BTN_* are 0–13 in Source enum.
-    if (source >= GD::SRC_BTN_MENU && source <= GD::SRC_BTN_RIGHT_THUMB) {
-        // Map source → Button enum → reading
-        int button = 0;
-        switch (source) {
-            case GD::SRC_BTN_MENU:           button = GD::BUTTON_MENU; break;
-            case GD::SRC_BTN_VIEW:           button = GD::BUTTON_VIEW; break;
-            case GD::SRC_BTN_A:              button = GD::BUTTON_A; break;
-            case GD::SRC_BTN_B:              button = GD::BUTTON_B; break;
-            case GD::SRC_BTN_X:              button = GD::BUTTON_X; break;
-            case GD::SRC_BTN_Y:              button = GD::BUTTON_Y; break;
-            case GD::SRC_BTN_DPAD_UP:        button = GD::BUTTON_DPAD_UP; break;
-            case GD::SRC_BTN_DPAD_DOWN:      button = GD::BUTTON_DPAD_DOWN; break;
-            case GD::SRC_BTN_DPAD_LEFT:      button = GD::BUTTON_DPAD_LEFT; break;
-            case GD::SRC_BTN_DPAD_RIGHT:     button = GD::BUTTON_DPAD_RIGHT; break;
-            case GD::SRC_BTN_LEFT_SHOULDER:  button = GD::BUTTON_LEFT_SHOULDER; break;
-            case GD::SRC_BTN_RIGHT_SHOULDER: button = GD::BUTTON_RIGHT_SHOULDER; break;
-            case GD::SRC_BTN_LEFT_THUMB:     button = GD::BUTTON_LEFT_THUMB; break;
-            case GD::SRC_BTN_RIGHT_THUMB:    button = GD::BUTTON_RIGHT_THUMB; break;
-        }
-        bool down = reading->is_button_down(button);
-        out_strength = down ? 1.0f : 0.0f;
-        return down;
+    // Axes need binding-level interpretation (deadzone, invert, threshold);
+    // the caller handles them, so an axis source never reports "pressed" here.
+    if (source >= GD::SRC_AXIS_LEFT_X && source <= GD::SRC_AXIS_FLIGHT_THROTTLE) {
+        out_strength = reading->get_source_value(source);
+        return false;
     }
 
-    // Axes
-    int axis = -1;
-    switch (source) {
-        case GD::SRC_AXIS_LEFT_X:        axis = GD::AXIS_LEFT_X; break;
-        case GD::SRC_AXIS_LEFT_Y:        axis = GD::AXIS_LEFT_Y; break;
-        case GD::SRC_AXIS_RIGHT_X:       axis = GD::AXIS_RIGHT_X; break;
-        case GD::SRC_AXIS_RIGHT_Y:       axis = GD::AXIS_RIGHT_Y; break;
-        case GD::SRC_AXIS_LEFT_TRIGGER:  axis = GD::AXIS_LEFT_TRIGGER; break;
-        case GD::SRC_AXIS_RIGHT_TRIGGER: axis = GD::AXIS_RIGHT_TRIGGER; break;
-        default: out_strength = 0.0f; return false;
-    }
-    out_strength = reading->get_axis(axis);
-    return false; // axes need binding-level interpretation; caller handles it
+    // Gamepad, arcade stick, flight stick and racing wheel buttons. Unknown
+    // sources and sources for kinds the device did not report read as up.
+    bool down = reading->is_source_down(source);
+    out_strength = down ? 1.0f : 0.0f;
+    return down;
 }
 
 void GameInputMapper::_process_bindings() {
@@ -473,6 +460,12 @@ int GameInputMapper::_source_to_joy_button(int source) {
         case GD::SRC_BTN_DPAD_DOWN:      return 12; // JOY_BUTTON_DPAD_DOWN
         case GD::SRC_BTN_DPAD_LEFT:      return 13; // JOY_BUTTON_DPAD_LEFT
         case GD::SRC_BTN_DPAD_RIGHT:     return 14; // JOY_BUTTON_DPAD_RIGHT
+        // Godot follows SDL's paddle order: right upper, left upper, right
+        // lower, left lower (Xbox Elite P1, P3, P2, P4).
+        case GD::SRC_BTN_PADDLE_RIGHT_1: return 16; // JOY_BUTTON_PADDLE1
+        case GD::SRC_BTN_PADDLE_LEFT_1:  return 17; // JOY_BUTTON_PADDLE2
+        case GD::SRC_BTN_PADDLE_RIGHT_2: return 18; // JOY_BUTTON_PADDLE3
+        case GD::SRC_BTN_PADDLE_LEFT_2:  return 19; // JOY_BUTTON_PADDLE4
         default: return -1;
     }
 }

@@ -12,6 +12,7 @@
 #include "gameinput_action_map.h"
 #include "gameinput_binding.h"
 #include "gameinput_device.h"
+#include "gameinput_force_feedback_effect.h"
 #include "gameinput_mapper.h"
 #include "gameinput_reading.h"
 
@@ -100,6 +101,7 @@ void initialize_godot_gameinput_extension(ModuleInitializationLevel p_level) {
     ClassDB::register_class<GameInput>();
     ClassDB::register_class<GameInputDevice>();
     ClassDB::register_class<GameInputReading>();
+    ClassDB::register_class<GameInputForceFeedbackEffect>();
     ClassDB::register_class<GameInputBinding>();
     ClassDB::register_class<GameInputActionMap>();
     ClassDB::register_class<GameInputMapper>();
@@ -111,6 +113,15 @@ void initialize_godot_gameinput_extension(ModuleInitializationLevel p_level) {
     _register_setting("game_input/runtime/auto_poll", true, Variant::BOOL);
     _register_setting(GAMEINPUT_SINGLETON_NAME_SETTING, String(GAMEINPUT_SINGLETON_NAME_DEFAULT),
                       Variant::STRING);
+    // Read by GameInput.initialize(); 0 keeps reading callbacks off.
+    _register_setting("game_input/runtime/reading_callback_kinds", 0, Variant::INT,
+                      PROPERTY_HINT_FLAGS,
+                      "Gamepad:1,Keyboard:2,Mouse:4,Arcade Stick:8,Flight Stick:16,"
+                      "Racing Wheel:32,Sensors:64,Controller:128");
+    _register_setting("game_input/runtime/focus_policy", 0, Variant::INT, PROPERTY_HINT_FLAGS,
+                      "Exclusive Foreground Input:2,Exclusive Foreground Guide Button:8,"
+                      "Exclusive Foreground Share Button:32,Enable Background Input:64,"
+                      "Enable Background Guide Button:128,Enable Background Share Button:256");
     _register_setting("game_input/mapper/default_action_map", String(""),
                       Variant::STRING, PROPERTY_HINT_FILE, "*.tres,*.res");
 
