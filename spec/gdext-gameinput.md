@@ -315,7 +315,7 @@ warning. Enums: `EffectKind`, `EffectState`, `FeedbackAxis`.
 | Wrapper/API | Native API(s) | Notes |
 | --- | --- | --- |
 | `GameInput.initialize()` | `GameInputCreate`, `IGameInput::SetFocusPolicy`, `IGameInput::RegisterDeviceCallback`, `IGameInput::RegisterSystemButtonCallback`, `IGameInput::RegisterKeyboardLayoutCallback`, `IGameInput::RegisterReadingCallback` | Creates the root GameInput interface and primes the always-on device callback (every readable kind, `GameInputDeviceAnyStatus`) used by the cache, hot-plug and status signals. The system-button and keyboard-layout callbacks are optional: a host that refuses them keeps working without those signals. The reading callback is registered only while `reading_callback_kinds` is non-zero. |
-| `GameInput.shutdown()` | `IGameInput::UnregisterCallback`, `IGameInput::Release` | Unregister callbacks first, then release the root interface and any cached COM-style objects. |
+| `GameInput.shutdown()` | `IGameInput::UnregisterCallback`, `IGameInput::Release` | Unregister callbacks first (retrying any whose unregister failed earlier), then release the root interface and any cached COM-style objects. |
 | `GameInput.poll()` | `IGameInput::GetCurrentReading` | Refreshes cached readings for tracked devices in polling mode: one call per kind group a device supports, so a device that reports several kinds gets all of them. Drains queued callback events first. |
 | `GameInput.get_devices()` / `GameInput.get_primary_device()` | `IGameInput::RegisterDeviceCallback` | Build a device cache from the initial enumeration delivered by callback registration and keep it current with subsequent device-status callbacks. |
 | `GameInput.get_connected_device_count()` | Device cache | Returns the current cached device count for diagnostics and sample UI. |
@@ -504,9 +504,12 @@ callback fence, signals emitted from `poll()`, soft-fail everywhere. It adds:
   `RegisterReadingCallback` writes into a preallocated 512-entry ring shared
   by every device (drop-oldest, with a swap buffer, so the steady-state drain
   does not allocate). Readings and device events share a sequence number, so
-  `poll()` emits them in the order GameInput reported them. A drop (or a
-  re-registration) sets `has_gap_before()` on the device's next event
-  reading, so a game can tell that its edges span missing readings.
+  `poll()` emits them in the order GameInput reported them. A drop sets
+  `has_gap_before()` on the next event reading of each device that lost
+  readings, including a device that connected in the same poll; the worker
+  records up to 16 such devices per poll in a fixed table and flags every
+  device past that. A re-registration flags every device. A game can then
+  tell that its edges span missing readings.
   The alternative was to walk GameInput's history from the main thread
   with `GetNextReading()`, as the GDK `GameInputSequential` sample does.
   That needs no callback, but the history holds only half a second of

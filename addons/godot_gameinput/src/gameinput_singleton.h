@@ -157,8 +157,30 @@ private:
     LocalVector<PendingEvent> m_pending_events;         // guarded by m_event_mutex
     std::unique_ptr<ReadingRing> m_reading_ring;        // guarded by m_event_mutex
     std::unique_ptr<ReadingRing> m_reading_ring_spare;  // main thread only
-    bool m_reading_ring_overflowed = false;             // guarded by m_event_mutex
     std::atomic<uint64_t> m_dropped_reading_count{0};
+
+    // Devices whose readings the full ring evicted since the last drain, so
+    // has_gap_before() lands only on the devices that lost readings. Fixed
+    // size because the worker must not allocate; when more devices lose
+    // readings than there are marks, every device is flagged instead.
+    struct GapMark {
+        IGameInputDevice *native_device = nullptr; // holds the evicted reading's reference
+        int64_t mock_device_id = 0;
+        bool consumed = false;
+    };
+    static constexpr uint32_t kMaxGapMarks = 16;
+    GapMark m_gap_marks[kMaxGapMarks];       // guarded by m_event_mutex
+    uint32_t m_gap_mark_count = 0;           // guarded by m_event_mutex
+    bool m_gap_marks_overflowed = false;     // guarded by m_event_mutex
+    GapMark m_drain_gap_marks[kMaxGapMarks]; // main thread, one drain at a time
+    uint32_t m_drain_gap_mark_count = 0;
+    bool m_drain_gap_all = false;
+
+    // Tokens whose UnregisterCallback() failed. Retried at the next reading
+    // registration change and at shutdown(), while the IGameInput that
+    // issued them is still alive. Main thread only.
+    LocalVector<GameInputCallbackToken> m_unresolved_callback_tokens;
+    uint64_t m_mock_callback_token_seq = 0;
 
     // --- Main-thread device cache ------------------------------------------
     // Immutable facts cached at connect time (GameInputDeviceInfo does not
@@ -219,9 +241,14 @@ private:
     HashMap<int64_t, EffectEntry> m_effects;
 
     // Mock devices announced through _test_inject_device() whose connect
-    // event has not been drained yet.
+    // event has not been drained yet, and the input pushed for them since.
     HashMap<int64_t, Dictionary> m_mock_pending_infos;
+    HashMap<int64_t, gameinput_internal::Snapshot> m_mock_pending_states;
     int64_t m_time_override_usec = -1;
+#ifndef NDEBUG
+    int m_test_unregister_failures = 0;
+    uint64_t m_test_unregister_attempts = 0;
+#endif
 
     // --- Internal helpers --------------------------------------------------
     bool _enter_callback();
@@ -233,8 +260,14 @@ private:
     void _clear_pending_events();
     void _ensure_reading_rings();
     bool _apply_reading_callback_registration();
-    void _unregister_callback(GameInputCallbackToken &token, const char *what);
+    bool _try_unregister(GameInputCallbackToken token);
+    bool _unregister_callback(GameInputCallbackToken &token, const char *what);
+    void _retry_unresolved_callbacks(bool final_attempt);
     void _wait_for_callbacks();
+    bool _mark_gap_locked(const ReadingEvent &evicted);
+    void _release_gap_marks_locked();
+    bool _consume_gap_mark(IGameInputDevice *native, int64_t mock_id);
+    void _settle_gap_marks(bool same_session);
     void _drain_callback_events();
     void _handle_pending_event(PendingEvent &ev);
     void _handle_device_status(PendingEvent &ev);
@@ -371,6 +404,8 @@ public:
     void _test_set_time_override_usec(int64_t usec);
     int _test_get_effect_count() const;
     void _test_force_poll();
+    void _test_fail_next_unregisters(int count);
+    Dictionary _test_get_unregister_state() const;
 #endif
 
     // Static C callbacks (invoked from GameInput worker threads).

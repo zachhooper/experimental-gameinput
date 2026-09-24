@@ -1065,6 +1065,10 @@ void GameInput::_bind_methods() {
                          &GameInput::_test_set_time_override_usec);
     ClassDB::bind_method(D_METHOD("_test_get_effect_count"), &GameInput::_test_get_effect_count);
     ClassDB::bind_method(D_METHOD("_test_force_poll"), &GameInput::_test_force_poll);
+    ClassDB::bind_method(D_METHOD("_test_fail_next_unregisters", "count"),
+                         &GameInput::_test_fail_next_unregisters);
+    ClassDB::bind_method(D_METHOD("_test_get_unregister_state"),
+                         &GameInput::_test_get_unregister_state);
 #endif
 }
 
@@ -1096,16 +1100,47 @@ void GameInput::_wait_for_callbacks() {
     }
 }
 
-void GameInput::_unregister_callback(GameInputCallbackToken &token, const char *what) {
-    if (!token) return;
+bool GameInput::_try_unregister(GameInputCallbackToken token) {
+#ifndef NDEBUG
+    m_test_unregister_attempts++;
+    if (m_test_unregister_failures > 0) {
+        m_test_unregister_failures--;
+        return false;
+    }
+#endif
+    // Mock tokens have no runtime behind them.
+    return !m_game_input || m_game_input->UnregisterCallback(token);
+}
+
+bool GameInput::_unregister_callback(GameInputCallbackToken &token, const char *what) {
+    if (!token) return true;
+    const GameInputCallbackToken t = token;
+    token = 0;
     // UnregisterCallback alone: calling StopCallback first makes it fail
     // intermittently on the GameInput 3.3 runtime, and a failed unregister
     // does not fence the callback.
-    if (m_game_input && !m_game_input->UnregisterCallback(token)) {
-        UtilityFunctions::push_warning("GameInput: UnregisterCallback() failed for the ", what,
-                                       " callback; late callbacks will be ignored.");
+    if (_try_unregister(t)) return true;
+    // Keep the token: a registration left behind would keep calling into the
+    // singleton after shutdown() released IGameInput.
+    m_unresolved_callback_tokens.push_back(t);
+    UtilityFunctions::push_warning("GameInput: UnregisterCallback() failed for the ", what,
+                                   " callback; it will be retried and late callbacks are"
+                                   " ignored.");
+    return false;
+}
+
+void GameInput::_retry_unresolved_callbacks(bool final_attempt) {
+    for (uint32_t i = m_unresolved_callback_tokens.size(); i > 0; --i) {
+        if (_try_unregister(m_unresolved_callback_tokens[i - 1])) {
+            m_unresolved_callback_tokens.remove_at_unordered(i - 1);
+        }
     }
-    token = 0;
+    if (final_attempt && !m_unresolved_callback_tokens.is_empty()) {
+        UtilityFunctions::push_warning("GameInput: ", (int64_t)m_unresolved_callback_tokens.size(),
+                                       " callback registration(s) could not be removed before"
+                                       " shutdown.");
+        m_unresolved_callback_tokens.clear();
+    }
 }
 
 bool GameInput::_queue_event(PendingEvent &ev) {
@@ -1121,6 +1156,7 @@ bool GameInput::_queue_event(PendingEvent &ev) {
 bool GameInput::_queue_reading(ReadingEvent &ev) {
     ReadingEvent evicted;
     bool did_evict = false;
+    bool mark_took_ref = false;
     {
         std::lock_guard<std::mutex> lock(m_event_mutex);
         if (!m_accepting_callbacks.load(std::memory_order_acquire) ||
@@ -1130,16 +1166,89 @@ bool GameInput::_queue_reading(ReadingEvent &ev) {
         ev.seq = m_next_event_seq++;
         did_evict = m_reading_ring->push(ev, &evicted);
         if (did_evict) {
-            m_reading_ring_overflowed = true;
+            mark_took_ref = _mark_gap_locked(evicted);
         }
     }
     if (did_evict) {
-        if (evicted.native_device) {
+        if (evicted.native_device && !mark_took_ref) {
             evicted.native_device->Release();
         }
         m_dropped_reading_count.fetch_add(1, std::memory_order_relaxed);
     }
     return true;
+}
+
+// Called with m_event_mutex held. Returns true when the new mark took over
+// the evicted reading's device reference.
+bool GameInput::_mark_gap_locked(const ReadingEvent &evicted) {
+    for (uint32_t i = 0; i < m_gap_mark_count; ++i) {
+        const GapMark &m = m_gap_marks[i];
+        if (m.native_device == evicted.native_device &&
+                m.mock_device_id == evicted.mock_device_id) {
+            return false;
+        }
+    }
+    if (m_gap_mark_count == kMaxGapMarks) {
+        m_gap_marks_overflowed = true;
+        return false;
+    }
+    GapMark &m = m_gap_marks[m_gap_mark_count++];
+    m.native_device = evicted.native_device;
+    m.mock_device_id = evicted.mock_device_id;
+    m.consumed = false;
+    return true;
+}
+
+// Called with m_event_mutex held.
+void GameInput::_release_gap_marks_locked() {
+    for (uint32_t i = 0; i < m_gap_mark_count; ++i) {
+        GapMark &m = m_gap_marks[i];
+        if (m.native_device) {
+            m.native_device->Release();
+        }
+        m = GapMark();
+    }
+    m_gap_mark_count = 0;
+    m_gap_marks_overflowed = false;
+}
+
+bool GameInput::_consume_gap_mark(IGameInputDevice *native, int64_t mock_id) {
+    for (uint32_t i = 0; i < m_drain_gap_mark_count; ++i) {
+        GapMark &m = m_drain_gap_marks[i];
+        if (!m.consumed && m.native_device == native && m.mock_device_id == mock_id) {
+            m.consumed = true;
+            return true;
+        }
+    }
+    return false;
+}
+
+// End of a drain: a device that lost readings but had none left to carry the
+// flag gets it on its next reading. Releases every mark's reference.
+void GameInput::_settle_gap_marks(bool same_session) {
+    for (uint32_t i = 0; i < m_drain_gap_mark_count; ++i) {
+        GapMark &m = m_drain_gap_marks[i];
+        if (same_session && !m.consumed) {
+            const int idx = _find_index_for_event(m.native_device, m.mock_device_id);
+            if (idx >= 0) {
+                m_devices.write[idx].event_gap_pending = true;
+            }
+        }
+        if (m.native_device) {
+            m.native_device->Release();
+        }
+        m = GapMark();
+    }
+    m_drain_gap_mark_count = 0;
+    if (same_session && m_drain_gap_all) {
+        for (int i = 0; i < m_devices.size(); ++i) {
+            DeviceEntry &e = m_devices.write[i];
+            if (e.frame_readings.is_empty()) {
+                e.event_gap_pending = true;
+            }
+        }
+    }
+    m_drain_gap_all = false;
 }
 
 void CALLBACK GameInput::_on_device_callback(
@@ -1423,6 +1532,7 @@ bool GameInput::_apply_reading_callback_registration() {
     const bool had_live = m_accepting_readings.load(std::memory_order_acquire);
     m_accepting_readings.store(false, std::memory_order_release);
     m_active_reading_token.store(0, std::memory_order_release);
+    _retry_unresolved_callbacks(false);
     _unregister_callback(m_reading_callback_token, "reading");
     _wait_for_callbacks();
     if (had_live) {
@@ -1439,6 +1549,10 @@ bool GameInput::_apply_reading_callback_registration() {
     _ensure_reading_rings();
 
     if (m_backend == Backend::Mock) {
+        // A stand-in token so the unregister path also runs under the mock.
+        m_reading_callback_token = (GameInputCallbackToken)++m_mock_callback_token_seq;
+        m_active_reading_token.store((uint64_t)m_reading_callback_token,
+                                     std::memory_order_release);
         m_accepting_readings.store(true, std::memory_order_release);
         return true;
     }
@@ -1472,7 +1586,6 @@ void GameInput::_drain_callback_events() {
 
     LocalVector<PendingEvent> events;
     std::unique_ptr<ReadingRing> readings;
-    bool overflowed = false;
     {
         std::lock_guard<std::mutex> lock(m_event_mutex);
         events = m_pending_events;
@@ -1481,16 +1594,19 @@ void GameInput::_drain_callback_events() {
             readings = std::move(m_reading_ring);
             m_reading_ring = std::move(m_reading_ring_spare);
         }
-        overflowed = m_reading_ring_overflowed;
-        m_reading_ring_overflowed = false;
+        // The marks' device references move with them.
+        m_drain_gap_mark_count = m_gap_mark_count;
+        for (uint32_t i = 0; i < m_gap_mark_count; ++i) {
+            m_drain_gap_marks[i] = m_gap_marks[i];
+            m_gap_marks[i] = GapMark();
+        }
+        m_gap_mark_count = 0;
+        m_drain_gap_all = m_gap_marks_overflowed;
+        m_gap_marks_overflowed = false;
     }
 
     for (int i = 0; i < m_devices.size(); ++i) {
-        DeviceEntry &e = m_devices.write[i];
-        e.frame_readings = Array();
-        if (overflowed) {
-            e.event_gap_pending = true;
-        }
+        m_devices.write[i].frame_readings = Array();
     }
 
     const uint64_t gen = m_generation;
@@ -1528,6 +1644,7 @@ void GameInput::_drain_callback_events() {
             m_reading_ring_spare = std::move(readings);
         }
     }
+    _settle_gap_marks(m_initialized && m_generation == gen);
 }
 
 void GameInput::_handle_pending_event(PendingEvent &ev) {
@@ -1574,6 +1691,7 @@ void GameInput::_handle_device_status(PendingEvent &ev) {
                 native->Release();
             } else {
                 m_mock_pending_infos.erase(ev.mock_device_id);
+                m_mock_pending_states.erase(ev.mock_device_id);
             }
             return;
         }
@@ -1596,6 +1714,10 @@ void GameInput::_handle_device_status(PendingEvent &ev) {
             entry.is_mock = true;
             entry.mock_info = *pending;
             m_mock_pending_infos.erase(ev.mock_device_id);
+            if (const gi::Snapshot *early = m_mock_pending_states.getptr(ev.mock_device_id)) {
+                entry.mock_state = *early; // input pushed before the connect was drained
+                m_mock_pending_states.erase(ev.mock_device_id);
+            }
             _fill_caps_from_mock(entry.mock_info, entry.caps);
             entry.keyboard_layout = (uint32_t)dict_int(entry.mock_info, "keyboard_layout", 0);
         }
@@ -1640,7 +1762,8 @@ void GameInput::_emit_status_change(const DeviceEntry &entry, uint32_t current,
 }
 
 void GameInput::_handle_reading_event(ReadingEvent &ev) {
-    const int idx = _find_index_for_event(ev.native_device, ev.mock_device_id);
+    IGameInputDevice *native = ev.native_device;
+    const int idx = _find_index_for_event(native, ev.mock_device_id);
     if (ev.native_device) {
         ev.native_device->Release();
         ev.native_device = nullptr;
@@ -1649,8 +1772,15 @@ void GameInput::_handle_reading_event(ReadingEvent &ev) {
         return;
     }
     DeviceEntry &e = m_devices.write[idx];
-    const bool gap = e.event_gap_pending;
+    // A gap mark's own reference keeps `native` alive for the comparison.
+    bool gap = e.event_gap_pending;
     e.event_gap_pending = false;
+    if (_consume_gap_mark(native, ev.mock_device_id)) {
+        gap = true;
+    }
+    if (m_drain_gap_all && e.frame_readings.is_empty()) {
+        gap = true;
+    }
     Ref<GameInputReading> reading =
             _make_reading(e, ev.snapshot, e.event_state, e.event_state.kinds, gap);
     gi::merge_kinds(e.event_state, ev.snapshot);
@@ -1808,6 +1938,7 @@ void GameInput::shutdown() {
     _unregister_callback(m_system_button_callback_token, "system button");
     _unregister_callback(m_keyboard_layout_callback_token, "keyboard layout");
     _unregister_callback(m_device_callback_token, "device");
+    _retry_unresolved_callbacks(true);
 
     // 3. Wait for any callback currently inside the body to exit.
     _wait_for_callbacks();
@@ -1842,10 +1973,11 @@ void GameInput::shutdown() {
             }
             m_reading_ring.reset();
         }
-        m_reading_ring_overflowed = false;
+        _release_gap_marks_locked();
     }
     m_reading_ring_spare.reset();
     m_mock_pending_infos.clear();
+    m_mock_pending_states.clear();
 
     if (m_game_input) {
         m_game_input->Release();
@@ -3080,6 +3212,7 @@ bool GameInput::_test_initialize_mock() {
     m_initialized = true;
     m_warned_uninitialized = false;
     m_dropped_reading_count.store(0, std::memory_order_relaxed);
+    m_test_unregister_failures = 0;
     _apply_reading_callback_registration();
     UtilityFunctions::print("GameInput: initialized (mock backend)");
     return true;
@@ -3125,6 +3258,7 @@ bool GameInput::_test_remove_device(int64_t device_id) {
     if (m_mock_pending_infos.has(device_id)) {
         // The queued connect finds no pending info and is ignored.
         m_mock_pending_infos.erase(device_id);
+        m_mock_pending_states.erase(device_id);
         return true;
     }
     int idx = _find_index_by_id(device_id);
@@ -3153,18 +3287,25 @@ bool GameInput::_test_set_device_status(int64_t device_id, int status) {
 
 bool GameInput::_test_push_reading(int64_t device_id, const Dictionary &state) {
     if (!m_initialized || m_backend != Backend::Mock) return false;
-    int idx = _find_index_by_id(device_id);
-    if (idx < 0) {
+    // A device whose connect is still queued can already report input, as a
+    // native device can between its device callback and the next poll().
+    const int idx = _find_index_by_id(device_id);
+    const Dictionary *pending_info = idx < 0 ? m_mock_pending_infos.getptr(device_id) : nullptr;
+    if (idx < 0 && !pending_info) {
         UtilityFunctions::push_error("GameInput: _test_push_reading(): device ", device_id,
-                                     " is not connected (poll() after _test_inject_device()).");
+                                     " is not connected.");
         return false;
     }
-    DeviceEntry &e = m_devices.write[idx];
+    DeviceCaps pending_caps;
+    if (pending_info) {
+        _fill_caps_from_mock(*pending_info, pending_caps);
+    }
+    const DeviceCaps &caps = idx >= 0 ? m_devices[idx].caps : pending_caps;
     const uint64_t ts = state.has("timestamp") ? (uint64_t)dict_int(state, "timestamp", 0)
                                                : _now_usec();
     gi::Snapshot snap;
     String err;
-    const uint32_t supported = snap_kinds_from_native(e.caps.native_supported_input);
+    const uint32_t supported = snap_kinds_from_native(caps.native_supported_input);
     if (!mock_snapshot_from_dict(state, supported, ts, snap, err)) {
         UtilityFunctions::push_error("GameInput: _test_push_reading(): ", err);
         return false;
@@ -3172,7 +3313,8 @@ bool GameInput::_test_push_reading(int64_t device_id, const Dictionary &state) {
     if (snap.kinds == 0) {
         return false; // nothing this device can report
     }
-    gi::merge_kinds(e.mock_state, snap);
+    gi::merge_kinds(idx >= 0 ? m_devices.write[idx].mock_state : m_mock_pending_states[device_id],
+                    snap);
     if (m_accepting_readings.load(std::memory_order_acquire) && (snap.kinds & m_reading_snap_kinds)) {
         ReadingEvent ev;
         ev.mock_device_id = device_id;
@@ -3234,6 +3376,18 @@ int GameInput::_test_get_effect_count() const {
 void GameInput::_test_force_poll() {
     m_last_polled_frame = UINT64_MAX;
     poll();
+}
+
+void GameInput::_test_fail_next_unregisters(int count) {
+    m_test_unregister_failures = count > 0 ? count : 0;
+}
+
+Dictionary GameInput::_test_get_unregister_state() const {
+    Dictionary d;
+    d["unresolved"] = (int64_t)m_unresolved_callback_tokens.size();
+    d["failures_left"] = (int64_t)m_test_unregister_failures;
+    d["attempts"] = (int64_t)m_test_unregister_attempts;
+    return d;
 }
 
 #endif // NDEBUG

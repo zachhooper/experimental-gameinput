@@ -79,7 +79,7 @@
 		<method name="has_gap_before" qualifiers="const">
 			<return type="bool" />
 			<description>
-				Returns [code]true[/code] when readings of this device were lost just before this one, because the reading ring overflowed or reading callbacks were re-registered. Edges computed against the previous state may then span the missing readings. Always [code]false[/code] for polled readings. See [method GameInput.get_dropped_reading_count].
+				Returns [code]true[/code] when readings of this device were lost just before this one, because the reading ring overflowed or reading callbacks were re-registered. Edges computed against the previous state may then span the missing readings. When more than 16 devices lose readings between two polls, the next reading of every device reports a gap. Always [code]false[/code] for polled readings. See [method GameInput.get_dropped_reading_count].
 			</description>
 		</method>
 		<method name="is_truncated" qualifiers="const">

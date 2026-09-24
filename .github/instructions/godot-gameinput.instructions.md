@@ -36,6 +36,14 @@ applyTo: "addons/godot_gameinput/**, addons/godot_gameinput_csharp/**, tests/god
 - Unregister with `UnregisterCallback` only. Calling `StopCallback` first
   makes `UnregisterCallback` fail intermittently on the GameInput 3.3
   runtime, and a failed unregister does not fence the callback.
+- Never forget a token whose unregister failed. `_unregister_callback()`
+  keeps it in `m_unresolved_callback_tokens`;
+  `_apply_reading_callback_registration()` retries the list and
+  `shutdown()` makes a final attempt while `m_game_input` is still alive.
+- Ring evictions mark only the device that lost the reading (`GapMark`,
+  fixed table under `m_event_mutex`; past `kMaxGapMarks`, every device). Do
+  not reintroduce a global overflow flag: it flags devices that lost
+  nothing and misses devices that connect in the same drain.
 - The main thread drains the pending queue inside `GameInput::poll()`. Signals
   are emitted from there — no `call_deferred` plumbing needed. Device events
   and event readings share a sequence number; keep them merged in that order.

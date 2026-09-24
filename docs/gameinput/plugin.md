@@ -241,8 +241,9 @@ Each event reading's previous state is the reading before it, so edges are
 exact per event. `get_buffered_readings(device)` returns the same readings
 for the last poll if you prefer to iterate instead of connecting. When the
 game polls too rarely the oldest readings are dropped:
-`get_dropped_reading_count()` counts them and the next reading of the device
-reports `has_gap_before()`.
+`get_dropped_reading_count()` counts them and the next reading of each device
+that lost readings reports `has_gap_before()`. If more than 16 devices lose
+readings between two polls, every device's next reading reports the gap.
 
 ## Vibration and haptics
 
@@ -468,7 +469,10 @@ preferred for clarity.
   `IGameInput::StopCallback`). Every callback the addon registers goes
   through the same in-flight fence, which keeps the callback context, cached
   devices and pending-event queues alive until any in-flight GameInput worker
-  callback has finished.
+  callback has finished. If `UnregisterCallback` fails, the addon keeps the
+  registration and tries again at the next reading-callback change and once
+  more at shutdown, before it releases `IGameInput`. Late callbacks from it
+  are ignored meanwhile.
 * When the engine quits, the addon shuts the runtime down and disconnects
   every connection to its signals before the script languages are torn down,
   so a lambda that is still connected cannot crash the process on exit.

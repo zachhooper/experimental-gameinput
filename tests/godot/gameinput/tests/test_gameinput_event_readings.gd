@@ -175,6 +175,166 @@ func test_ring_overflow_drops_oldest_and_flags_the_gap() -> void:
 	assert_false(readings[1].has_gap_before(), "later readings do not")
 
 
+func _readings_by_device() -> Dictionary:
+	var by_id := {}
+	for e in _log.named("reading_received"):
+		var id: int = e[1].get_device_id()
+		if not by_id.has(id):
+			by_id[id] = []
+		by_id[id].append(e[2])
+	return by_id
+
+
+func test_overflow_flags_only_the_device_that_lost_readings() -> void:
+	var a = _start(_k("DEVICE_GAMEPAD"))
+	if a == null:
+		return
+	var b = add_mock_device(_gi)
+	_log.clear()
+	for i in 600:
+		_gi._test_push_reading(a.get_device_id(), {"gamepad": {"buttons": 0}})
+	_push(b, {"gamepad": {"buttons": _d("BUTTON_A")}})
+	_gi._test_force_poll()
+	var by_id := _readings_by_device()
+	assert_eq(by_id[b.get_device_id()].size(), 1, "B's reading was kept")
+	assert_false(by_id[b.get_device_id()][0].has_gap_before(), "B lost nothing, so no gap")
+	assert_true(by_id[a.get_device_id()][0].has_gap_before(), "A's first kept reading has the gap")
+	assert_false(by_id[a.get_device_id()][1].has_gap_before(), "the flag applies once")
+
+
+func test_overflow_before_a_new_device_is_drained_flags_its_gap() -> void:
+	var pad = _start(_k("DEVICE_GAMEPAD"))
+	if pad == null:
+		return
+	var id: int = _gi._test_inject_device({})
+	assert_gt(id, 0, "device injected")
+	var accepted := 0
+	for i in 600:
+		if _gi._test_push_reading(id, {"timestamp": 1000 + i, "gamepad": {"buttons": 0}}):
+			accepted += 1
+	assert_eq(accepted, 600, "a device whose connect is still queued accepts input")
+	_gi._test_force_poll()
+	var readings: Array = _readings_by_device().get(id, [])
+	assert_eq(readings.size(), 512, "the ring kept the newest 512")
+	assert_eq(readings[0].get_timestamp(), 1000 + 600 - 512, "oldest readings were dropped")
+	assert_true(readings[0].has_gap_before(), "a device connected in the same poll gets the gap")
+	_log.clear()
+	_push(pad, {"gamepad": {"buttons": 0}})
+	_gi._test_force_poll()
+	assert_false(_readings()[0].has_gap_before(), "the device that lost nothing is not flagged")
+
+
+func test_input_pushed_before_the_connect_drains_reaches_the_polled_state() -> void:
+	var pad = _start(0)
+	if pad == null:
+		return
+	var id: int = _gi._test_inject_device({})
+	assert_true(_gi._test_push_reading(id, {"gamepad": {"buttons": _d("BUTTON_B")}}),
+			"accepted before the connect is drained")
+	_gi._test_force_poll()
+	var device = _gi.get_device_by_id(id)
+	assert_not_null(device, "the device connected")
+	if device == null:
+		return
+	var reading = _gi.get_current_reading(device)
+	assert_not_null(reading, "the early input produced a polled reading")
+	if reading == null:
+		return
+	assert_true(reading.is_button_down(_d("BUTTON_B")),
+			"the early input is in the first polled reading")
+
+
+func test_a_device_whose_readings_were_all_dropped_gets_the_gap_next_time() -> void:
+	var a = _start(_k("DEVICE_GAMEPAD"))
+	if a == null:
+		return
+	var b = add_mock_device(_gi)
+	_log.clear()
+	_push(a, {"gamepad": {"buttons": 0}})
+	for i in 512:
+		_gi._test_push_reading(b.get_device_id(), {"gamepad": {"buttons": 0}})
+	assert_eq(_gi.get_dropped_reading_count(), 1, "only A's reading was dropped")
+	_gi._test_force_poll()
+	var by_id := _readings_by_device()
+	assert_false(by_id.has(a.get_device_id()), "A had no reading left this poll")
+	assert_false(by_id[b.get_device_id()][0].has_gap_before(), "B kept every reading")
+	_log.clear()
+	_push(a, {"gamepad": {"buttons": _d("BUTTON_A")}})
+	_gi._test_force_poll()
+	assert_true(_readings()[0].has_gap_before(), "A's next reading carries the gap")
+
+
+func test_more_devices_losing_readings_than_marks_flags_every_quiet_device() -> void:
+	var flood = _start(_k("DEVICE_GAMEPAD"))
+	if flood == null:
+		return
+	var quiet := []
+	for i in 17:
+		quiet.append(add_mock_device(_gi))
+	_log.clear()
+	for device in quiet:
+		_push(device, {"gamepad": {"buttons": 0}})
+	for i in 512:
+		_gi._test_push_reading(flood.get_device_id(), {"gamepad": {"buttons": 0}})
+	assert_eq(_gi.get_dropped_reading_count(), 17, "every quiet device lost its reading")
+	_gi._test_force_poll()
+	_log.clear()
+	for device in quiet:
+		_push(device, {"gamepad": {"buttons": 0}})
+	_gi._test_force_poll()
+	var by_id := _readings_by_device()
+	var flagged := 0
+	for device in quiet:
+		if by_id[device.get_device_id()][0].has_gap_before():
+			flagged += 1
+	assert_eq(flagged, 17, "past the mark table, every device without a kept reading is flagged")
+
+
+func test_a_failed_unregister_is_retried_on_the_next_change() -> void:
+	var pad = _start(_k("DEVICE_GAMEPAD"))
+	if pad == null:
+		return
+	var before: Dictionary = _gi._test_get_unregister_state()
+	_gi._test_fail_next_unregisters(1)
+	assert_true(_gi.set_reading_callback_kinds(_k("DEVICE_GAMEPAD") | _k("DEVICE_MOUSE")),
+			"re-registration succeeds")
+	var failed: Dictionary = _gi._test_get_unregister_state()
+	assert_eq(failed["attempts"] - before["attempts"], 1, "one unregister attempt")
+	assert_eq(failed["unresolved"], 1, "the failed token is kept, not forgotten")
+	_push(pad, {"gamepad": {"buttons": 0}})
+	_gi._test_force_poll()
+	assert_eq(_readings().size(), 1, "the new registration still delivers")
+	assert_true(_gi.set_reading_callback_kinds(_k("DEVICE_GAMEPAD")), "changed again")
+	var retried: Dictionary = _gi._test_get_unregister_state()
+	assert_eq(retried["attempts"] - failed["attempts"], 2, "the kept token and the current one")
+	assert_eq(retried["unresolved"], 0, "the kept token is removed on the next change")
+
+
+func test_shutdown_retries_a_failed_unregister() -> void:
+	var pad = _start(_k("DEVICE_GAMEPAD"))
+	if pad == null:
+		return
+	var before: Dictionary = _gi._test_get_unregister_state()
+	_gi._test_fail_next_unregisters(1)
+	_gi.shutdown()
+	var after: Dictionary = _gi._test_get_unregister_state()
+	assert_eq(after["attempts"] - before["attempts"], 2, "shutdown tries once more")
+	assert_eq(after["unresolved"], 0, "the retry removed the registration")
+	assert_eq(after["failures_left"], 0, "both the failure and the retry ran")
+
+
+func test_shutdown_gives_up_after_its_final_attempt() -> void:
+	var pad = _start(_k("DEVICE_GAMEPAD"))
+	if pad == null:
+		return
+	var before: Dictionary = _gi._test_get_unregister_state()
+	_gi._test_fail_next_unregisters(2)
+	_gi.shutdown()
+	var after: Dictionary = _gi._test_get_unregister_state()
+	assert_eq(after["attempts"] - before["attempts"], 2, "one retry, no more")
+	assert_eq(after["unresolved"], 0, "nothing is kept past the IGameInput that issued it")
+
+
 func test_readings_and_device_events_share_one_order() -> void:
 	var pad = _start(_k("DEVICE_GAMEPAD"))
 	if pad == null:
