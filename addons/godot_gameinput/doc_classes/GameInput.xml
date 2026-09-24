@@ -182,7 +182,7 @@
 			<param index="3" name="timestamp" type="int" />
 			<description>
 				Emitted when the [enum GameInputDevice.DeviceStatus] flags of a connected device change while it stays connected, for example when GameInput sets [constant GameInputDevice.STATUS_HAPTIC_INFO_READY]. [param status] and [param previous_status] are the new and old flags. [param timestamp] is on the GameInput clock, in microseconds (see [method get_current_timestamp]).
-				Connects and disconnects are reported by [signal device_connected] and [signal device_disconnected] instead.
+				Connects and disconnects are reported by [signal device_connected] and [signal device_disconnected] instead. Flags that arrive together with the connect are already set in [method GameInputDevice.get_status] when [signal device_connected] is emitted, and do not emit this signal, so check both places when waiting for [constant GameInputDevice.STATUS_HAPTIC_INFO_READY].
 			</description>
 		</signal>
 		<signal name="reading_received">

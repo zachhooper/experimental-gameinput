@@ -288,7 +288,11 @@ public static class GameInput
     public static event Action<GameInputDevice> DeviceConnected;
     public static event Action<long> DeviceDisconnected;
 
-    /// <summary>(device, status, previousStatus, timestamp) when a connected device's status flags change.</summary>
+    /// <summary>
+    /// (device, status, previousStatus, timestamp) when a connected device's status flags change while it stays
+    /// connected. Flags that arrive with the connect are already in <see cref="GameInputDevice.Status"/> when
+    /// <see cref="DeviceConnected"/> fires and do not raise this event.
+    /// </summary>
     public static event Action<GameInputDevice, GameInputDevice.DeviceStatus, GameInputDevice.DeviceStatus, long>
         DeviceStatusChanged;
 

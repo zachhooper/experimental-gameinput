@@ -162,6 +162,9 @@ What a device can tell you:
   class reference.
 * `get_status()` and the `device_status_changed(device, status,
   previous_status, timestamp)` signal — `STATUS_CONNECTED` and
+  `STATUS_HAPTIC_INFO_READY`. The signal only reports changes after the
+  connect: flags that arrive with the connect are already in `get_status()`
+  when `device_connected` fires, so check both places when waiting for
   `STATUS_HAPTIC_INFO_READY`.
 * `get_button_label(source)` — the label GameInput reports for a button, as
   a snake_case name (`"xbox_a"`, `"icon_cross"`, `"letter_a"`, …), to pick

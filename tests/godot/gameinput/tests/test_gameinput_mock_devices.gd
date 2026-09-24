@@ -138,6 +138,22 @@ func test_status_change_signal() -> void:
 	assert_eq(_log.events.size(), 0, "an unchanged status emits nothing")
 
 
+func test_status_bits_that_arrive_with_the_connect_emit_no_status_change() -> void:
+	if not _start():
+		return
+	var connected := _d("STATUS_CONNECTED")
+	var ready := _d("STATUS_HAPTIC_INFO_READY")
+	var seen: Array = []
+	var on_connected := func(device) -> void: seen.append(device.get_status())
+	_gi.device_connected.connect(on_connected)
+	var id: int = _gi._test_inject_device({"status": connected | ready})
+	_gi._test_force_poll()
+	_gi.device_connected.disconnect(on_connected)
+	assert_eq(_log.names(), ["device_connected"], "the connect is the only signal")
+	assert_eq(seen, [connected | ready], "get_status() already has the bit inside device_connected")
+	assert_true(_gi.get_device_by_id(id).get_haptic_info()["ready"], "haptic info is ready from the start")
+
+
 func test_status_without_connected_bit_is_a_disconnect() -> void:
 	if not _start():
 		return
