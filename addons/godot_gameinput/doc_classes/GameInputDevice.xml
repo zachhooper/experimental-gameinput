@@ -20,7 +20,7 @@
 		<method name="get_display_name" qualifiers="const">
 			<return type="String" />
 			<description>
-				Returns the human-readable device name reported by GameInput (e.g. "Xbox Wireless Controller"). Falls back to a synthesized [code]"GameInput Device VVVV:PPPP"[/code] string built from vendor and product ids when no display name is available, or an empty [String] if the device has been disconnected.
+				Returns the human-readable device name reported by GameInput (e.g. "Xbox Wireless Controller"). Falls back to a synthesized [code]"GameInput Device VVVV:PPPP"[/code] string built from vendor and product ids when no display name is available, or to [code]"GameInput Aggregate Device"[/code] for an unnamed aggregate from [method GameInput.create_aggregate_device]. Returns an empty [String] if the device has been disconnected.
 			</description>
 		</method>
 		<method name="get_kind_mask" qualifiers="const">

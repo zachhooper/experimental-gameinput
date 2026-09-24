@@ -252,6 +252,11 @@ public static class GameInput
     public static string CreateAggregateDevice(DeviceKind kind) =>
         Singleton == null ? string.Empty : Singleton.Call("create_aggregate_device", (int)kind).AsString();
 
+    /// <summary>
+    /// Disables an aggregate. The device stays connected but stops producing
+    /// readings; <see cref="CreateAggregateDevice"/> with the same kind
+    /// re-enables it and returns the same id.
+    /// </summary>
     public static bool DisableAggregateDevice(string appLocalId) =>
         Singleton != null && Singleton.Call("disable_aggregate_device", appLocalId).AsBool();
 

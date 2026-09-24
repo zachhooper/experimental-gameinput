@@ -2310,9 +2310,13 @@ String GameInput::device_get_display_name(int64_t id) {
     // GameInput v3 ships `displayName` as a plain null-terminated `const char *`
     // (v1 wrapped it in a `GameInputString` struct with `.data` + `.sizeInBytes`).
     // Many HID keyboards and mice report an empty name rather than null; both
-    // fall back to the documented "GameInput Device VVVV:PPPP" form.
+    // fall back to the documented "GameInput Device VVVV:PPPP" form. Aggregates
+    // report 0000:0000, so they get a name that says what they are instead.
     if (info && info->displayName && info->displayName[0] != '\0') {
         return String::utf8(info->displayName);
+    }
+    if (info && info->deviceFamily == GameInputFamilyAggregate) {
+        return String("GameInput Aggregate Device");
     }
     if (info) {
         return String("GameInput Device ") +

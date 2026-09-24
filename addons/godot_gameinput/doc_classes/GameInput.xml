@@ -157,6 +157,7 @@
 			<param index="0" name="app_local_id" type="String" />
 			<description>
 				Disables an aggregate device created by [method create_aggregate_device]. [param app_local_id] must be the 64-character hexadecimal id that method returned; anything else returns [code]false[/code] with a warning. Returns [code]true[/code] on success, or [code]false[/code] when GameInput rejects the request or the runtime is not initialized.
+				Disabling does not disconnect the aggregate: it stays in [method get_devices] but stops producing aggregated readings and status changes. Call [method create_aggregate_device] with the same kind to re-enable it; GameInput returns the same id.
 			</description>
 		</method>
 	</methods>
