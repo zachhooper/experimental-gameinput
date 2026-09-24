@@ -474,7 +474,14 @@ public partial class GameInputSelfTest : Node
 
         Note("constants_compared", compared);
         Expect(compared > 0, "no constants were compared");
-        PassDetail($"facade loaded; all {compared} native constants match the C# enums");
+
+        // The static helpers go through ClassDB.ClassCallStatic and need no device.
+        Expect(GameInputDevice.ScanCodeToPhysicalKey(0x1E) == Key.A, "scan code 0x1E is not Key.A");
+        Expect(GameInputDevice.ScanCodeToPhysicalKey(0xE048) == Key.Up, "extended scan code 0xE048 is not Key.Up");
+        Expect(GameInputDevice.VirtualKeyToKeycode(0x41) == Key.A, "virtual key 0x41 is not Key.A");
+        Expect(GameInputDevice.SwitchPositionToVector(GameInputDevice.SwitchPosition.Up) == new Vector2(0, -1),
+            "SwitchPosition.Up is not Vector2(0, -1)");
+        PassDetail($"facade loaded; all {compared} native constants match the C# enums; static helpers convert");
         return Task.CompletedTask;
     }
 
@@ -605,6 +612,11 @@ public partial class GameInputSelfTest : Node
             var device = connected[0][0] as GameInputDevice;
             Expect(device != null && device.DeviceId == _mockPadId, "DeviceConnected did not carry the injected pad");
             Expect(device?.DisplayName == "Selftest Pad", $"the wrapper reads the name '{device?.DisplayName}'");
+            // v1 shape: instance methods over the static natives.
+            Expect(device?.ButtonToSource(GameInputDevice.Button.A) == (int)GameInputDevice.Source.BtnA,
+                "ButtonToSource(Button.A) is not Source.BtnA");
+            Expect(device?.AxisToSource(GameInputDevice.Axis.Wheel) == (int)GameInputDevice.Source.AxisWheel,
+                "AxisToSource(Axis.Wheel) is not Source.AxisWheel");
         }
 
         Expect(Sample.DevicesText.Contains("Selftest Pad"), "the sample's device list does not show the pad");

@@ -284,9 +284,34 @@ public static class GameInput
         }
     }
 
-    // --- Signals (main-thread, connected once on first singleton resolution) ---
-    public static event Action<GameInputDevice> DeviceConnected;
-    public static event Action<long> DeviceDisconnected;
+    // --- Signals (main thread) ---
+    // Adding a handler resolves the singleton and connects the native signals,
+    // so a C# node that only subscribes still hears events while GDScript (for
+    // example the addon's bootstrap autoload) drives Initialize() and Poll().
+    private static Action<GameInputDevice> _deviceConnected;
+    private static Action<long> _deviceDisconnected;
+    private static Action<GameInputDevice, GameInputDevice.DeviceStatus, GameInputDevice.DeviceStatus, long>
+        _deviceStatusChanged;
+    private static Action<GameInputDevice, GameInputReading> _readingReceived;
+    private static Action<GameInputDevice, GameInputDevice.SystemButton, GameInputDevice.SystemButton, long>
+        _systemButtonsChanged;
+    private static Action<GameInputDevice, long, long, long> _keyboardLayoutChanged;
+
+    private static void ConnectBridge() => _ = Singleton;
+
+    /// <summary>(device) when a device connects.</summary>
+    public static event Action<GameInputDevice> DeviceConnected
+    {
+        add { _deviceConnected += value; ConnectBridge(); }
+        remove => _deviceConnected -= value;
+    }
+
+    /// <summary>(deviceId) when a device disconnects.</summary>
+    public static event Action<long> DeviceDisconnected
+    {
+        add { _deviceDisconnected += value; ConnectBridge(); }
+        remove => _deviceDisconnected -= value;
+    }
 
     /// <summary>
     /// (device, status, previousStatus, timestamp) when a connected device's status flags change while it stays
@@ -294,17 +319,33 @@ public static class GameInput
     /// <see cref="DeviceConnected"/> fires and do not raise this event.
     /// </summary>
     public static event Action<GameInputDevice, GameInputDevice.DeviceStatus, GameInputDevice.DeviceStatus, long>
-        DeviceStatusChanged;
+        DeviceStatusChanged
+    {
+        add { _deviceStatusChanged += value; ConnectBridge(); }
+        remove => _deviceStatusChanged -= value;
+    }
 
     /// <summary>(device, reading) for each event-driven reading; see <see cref="SetReadingCallbackKinds"/>.</summary>
-    public static event Action<GameInputDevice, GameInputReading> ReadingReceived;
+    public static event Action<GameInputDevice, GameInputReading> ReadingReceived
+    {
+        add { _readingReceived += value; ConnectBridge(); }
+        remove => _readingReceived -= value;
+    }
 
     /// <summary>(device, buttons, previousButtons, timestamp) when Guide or Share is pressed or released.</summary>
     public static event Action<GameInputDevice, GameInputDevice.SystemButton, GameInputDevice.SystemButton, long>
-        SystemButtonsChanged;
+        SystemButtonsChanged
+    {
+        add { _systemButtonsChanged += value; ConnectBridge(); }
+        remove => _systemButtonsChanged -= value;
+    }
 
     /// <summary>(device, layout, previousLayout, timestamp) when a keyboard's layout changes.</summary>
-    public static event Action<GameInputDevice, long, long, long> KeyboardLayoutChanged;
+    public static event Action<GameInputDevice, long, long, long> KeyboardLayoutChanged
+    {
+        add { _keyboardLayoutChanged += value; ConnectBridge(); }
+        remove => _keyboardLayoutChanged -= value;
+    }
 
     private static void EnsureSignalsConnected()
     {
@@ -315,22 +356,22 @@ public static class GameInput
 
         _signalsConnected = true;
         _singleton.Connect("device_connected",
-            Callable.From((GodotObject device) => DeviceConnected?.Invoke(GameInputDevice.From(device))));
+            Callable.From((GodotObject device) => _deviceConnected?.Invoke(GameInputDevice.From(device))));
         _singleton.Connect("device_disconnected",
-            Callable.From((long deviceId) => DeviceDisconnected?.Invoke(deviceId)));
+            Callable.From((long deviceId) => _deviceDisconnected?.Invoke(deviceId)));
         _singleton.Connect("device_status_changed",
             Callable.From((GodotObject device, long status, long previous, long timestamp) =>
-                DeviceStatusChanged?.Invoke(GameInputDevice.From(device), (GameInputDevice.DeviceStatus)status,
+                _deviceStatusChanged?.Invoke(GameInputDevice.From(device), (GameInputDevice.DeviceStatus)status,
                     (GameInputDevice.DeviceStatus)previous, timestamp)));
         _singleton.Connect("reading_received",
             Callable.From((GodotObject device, GodotObject reading) =>
-                ReadingReceived?.Invoke(GameInputDevice.From(device), GameInputReading.From(reading))));
+                _readingReceived?.Invoke(GameInputDevice.From(device), GameInputReading.From(reading))));
         _singleton.Connect("system_buttons_changed",
             Callable.From((GodotObject device, long buttons, long previous, long timestamp) =>
-                SystemButtonsChanged?.Invoke(GameInputDevice.From(device), (GameInputDevice.SystemButton)buttons,
+                _systemButtonsChanged?.Invoke(GameInputDevice.From(device), (GameInputDevice.SystemButton)buttons,
                     (GameInputDevice.SystemButton)previous, timestamp)));
         _singleton.Connect("keyboard_layout_changed",
             Callable.From((GodotObject device, long layout, long previous, long timestamp) =>
-                KeyboardLayoutChanged?.Invoke(GameInputDevice.From(device), layout, previous, timestamp)));
+                _keyboardLayoutChanged?.Invoke(GameInputDevice.From(device), layout, previous, timestamp)));
     }
 }

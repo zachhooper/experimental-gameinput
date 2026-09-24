@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -50,5 +51,52 @@ public class GameInputParityTests
 
         Assert.True(problems.Count == 0,
             $"{csharpType.FullName} enums disagree with the native constants: {string.Join("; ", problems)}");
+    }
+
+    // A C# node that only subscribes must hear the native signals while GDScript
+    // (the addon's bootstrap autoload) drives Initialize() and Poll(), so adding
+    // a handler has to connect the bridge. A field-like event only stores the
+    // delegate and would stay silent until something reads GameInput.Singleton.
+    [Fact]
+    public void AddingAnEventHandlerConnectsTheNativeBridge()
+    {
+        EventInfo[] events = typeof(GodotGameInput.GameInput).GetEvents(BindingFlags.Public | BindingFlags.Static);
+        Assert.NotEmpty(events);
+
+        string[] silent = events
+            .Where(e => !Calls(e.AddMethod, "ConnectBridge", "get_Singleton"))
+            .Select(e => e.Name)
+            .ToArray();
+
+        Assert.True(silent.Length == 0,
+            $"GameInput event(s) {string.Join(", ", silent)} do not connect the native signals when a handler "
+            + "is added; give each an add accessor that resolves the singleton.");
+    }
+
+    private static bool Calls(MethodInfo method, params string[] names)
+    {
+        const byte CallOpcode = 0x28;
+        byte[] il = method.GetMethodBody()?.GetILAsByteArray() ?? Array.Empty<byte>();
+        for (int i = 0; i + 4 < il.Length; i++)
+        {
+            if (il[i] != CallOpcode)
+            {
+                continue;
+            }
+
+            try
+            {
+                if (names.Contains(method.Module.ResolveMethod(BitConverter.ToInt32(il, i + 1)).Name))
+                {
+                    return true;
+                }
+            }
+            catch (ArgumentException)
+            {
+                // The byte was an operand, not an opcode.
+            }
+        }
+
+        return false;
     }
 }

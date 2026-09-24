@@ -56,12 +56,12 @@ what the facade adds on top of it, and the C# tutorial's wiring:
 
 | Check | What it verifies |
 | --- | --- |
-| `api.facade` | Every facade enum member has the value of the native constant in the loaded extension. |
+| `api.facade` | Every facade enum member has the value of the native constant in the loaded extension, and the static key and hat-switch helpers convert. |
 | `runtime.initialized` | The bootstrap initialized the real GameInput runtime. |
 | `runtime.timestamp` | `GameInput.CurrentTimestamp` advances. |
 | `runtime.devices` | The facade wraps every connected device with a unique id, a name and `IsConnected`, and `GetConnectedDeviceCount` agrees with `GetDevices`. |
 | `mock.session` | The addon's debug-only mock backend takes over. |
-| `sample.hotplug_ui` | A scripted pad reaches `DeviceConnected`, the device list, the count and the hot-plug log. |
+| `sample.hotplug_ui` | A scripted pad reaches `DeviceConnected`, the device list, the count and the hot-plug log, and its `ButtonToSource` / `AxisToSource` map to `Source`. |
 | `sample.action_bridge` | A presses `jump` and `ui_accept`; the stick drives `move_left` / `move_right`. |
 | `sample.player_jump` | The player jumps with the Step 7 rumble and moves. |
 | `sample.disconnect_releases` | Unplugging the pad mid-press releases the action and updates the UI. |

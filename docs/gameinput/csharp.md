@@ -61,6 +61,14 @@ The facade follows the GDScript API with C# names:
   `GameInputDevice.DeviceStatus`, `GameInputDevice.SystemButton`,
   `GameInputDevice.MouseButton`, `GameInputForceFeedbackEffect.EffectKind`
   and the rest. Their values are the native constants.
+* Static native methods are static in C#:
+  `GameInputDevice.ScanCodeToPhysicalKey()`,
+  `GameInputDevice.VirtualKeyToKeycode()` and
+  `GameInputDevice.SwitchPositionToVector()`. The exceptions are
+  `ButtonToSource()` and `AxisToSource()`, which are static natively but
+  shipped as instance methods in the first facade; they stay instance methods
+  so existing callers keep compiling, and they return the same values from
+  any device.
 * Signals are static events with typed arguments (see [Events](#events)).
 
 ## Devices, readings, and haptics
@@ -104,7 +112,8 @@ motor first, like Godot's `Input.StartJoyVibration`.
 ## Events
 
 The facade raises the native signals as static events, on the main thread,
-from `GameInput.Poll()`:
+during the native `poll()` — whether the GDScript bootstrap autoload, the C#
+`GameInputRuntime` autoload or your own `GameInput.Poll()` call drives it:
 
 | Event | Arguments |
 | --- | --- |
@@ -115,9 +124,9 @@ from `GameInput.Poll()`:
 | `SystemButtonsChanged` | `GameInputDevice device, SystemButton buttons, SystemButton previous, long timestamp` |
 | `KeyboardLayoutChanged` | `GameInputDevice device, long layout, long previous, long timestamp` |
 
-The facade connects to the native signals the first time a call reaches the
-singleton — the bootstrap autoload's first `Initialize()` or `Poll()` does
-that — so handlers added earlier start receiving events from then on.
+Adding a handler connects the facade to the native signals, and so does any
+call through `GameInput`. A C# node that only subscribes therefore hears
+events in a project where GDScript initializes and polls GameInput.
 
 Because the events are static, a handler keeps its node reachable and keeps
 being called after the node leaves the tree. Subscribe in `_EnterTree()` and
