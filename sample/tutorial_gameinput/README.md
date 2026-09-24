@@ -86,10 +86,10 @@ devices, and restore the real runtime at the end.
 | `runtime.initialized` | The bootstrap initialized the real GameInput runtime. |
 | `runtime.timestamp` | The GameInput clock advances. |
 | `runtime.devices` | Every device has a unique id, input kinds, `STATUS_CONNECTED`, the core `get_device_info()` keys and a 64-character app-local id; the primary gamepad is the first one listed. |
-| `runtime.readings` | Each device's reading carries its id, only kinds the device supports, and a timestamp that is not in the future. |
+| `runtime.readings` | Each device's reading carries its id, only kinds the device supports, and a timestamp that is not in the future. Skips when no device returned a reading. |
 | `runtime.reading_callbacks` | Event-driven readings can be registered and restored. |
 | `runtime.focus_policy` | The focus policy round-trips. |
-| `runtime.aggregate_device` | An aggregate gamepad can be created, disabled and re-enabled under the same id. |
+| `runtime.aggregate_device` | An aggregate gamepad can be created, disabled and re-enabled under the same id. With a gamepad connected it must surface, named, and stay listed while disabled; with none it has no member, cannot surface, and the check skips. |
 | `runtime.vibration` | A timed rumble starts and stops by itself on every device with rumble motors. |
 | `runtime.force_feedback` | Force-feedback motors describe themselves. |
 | `runtime.haptics` | Haptic devices describe themselves. |
@@ -97,7 +97,7 @@ devices, and restore the real runtime at the end.
 | `vpad.info` | It reports the Xbox 360 family and both rumble motors. |
 | `vpad.input` | Its A button and left stick arrive through polling, `reading_received` and the mapper. |
 | `vpad.rumble` | A timed rumble reaches the virtual motors and stops on time, checked against the driver's log. |
-| `vpad.aggregate_rumble` | Rumble sent to an enabled aggregate gamepad reaches the virtual pad's motors and stops on time. |
+| `vpad.aggregate_rumble` | An aggregate gamepad surfaces over the virtual pad, and rumble sent to it reaches the virtual pad's motors and stops on time. |
 | `mock.session` | The mock backend takes over. |
 | `sample.hotplug_ui` | A scripted pad reaches `device_connected`, the device list, the count and the hot-plug log on the next frame. |
 | `sample.action_bridge` | A presses `jump` and `ui_accept`; the stick drives `move_left` / `move_right` with deadzone rescaling. |
@@ -113,8 +113,10 @@ devices, and restore the real runtime at the end.
 
 A check that cannot run on this machine is **skipped** with the reason —
 for example `runtime.vibration` with no rumble-capable device connected,
-the `vpad` group without `-VirtualPad`, or `vpad.input` in a locked or
-Remote Desktop session, where GameInput delivers no input. Skips do not
+`runtime.aggregate_device` with no gamepad connected, the `vpad` group
+without `-VirtualPad`, or `vpad.input` in a locked or Remote Desktop
+session, where GameInput delivers no input. A check never passes on nothing:
+`runtime.readings` skips when no device returned a reading. Skips do not
 fail the run unless you pass `-Strict`.
 
 ### Options

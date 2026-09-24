@@ -36,7 +36,9 @@ reports those runs as skipped — though rumble output still works there.
    With the controllers you are about to test plugged in, the `runtime.*`
    checks exercise them: `runtime.vibration`, `runtime.force_feedback` and
    `runtime.haptics` pass instead of skipping when a connected device has
-   rumble motors, force-feedback motors or haptics.
+   rumble motors, force-feedback motors or haptics, and
+   `runtime.aggregate_device` passes instead of skipping once a gamepad is
+   connected.
 
 3. Open `sample/tutorial_gameinput/` in the Godot editor and run it (F5).
 

@@ -845,6 +845,9 @@ func _check_runtime_readings() -> bool:
 		_expect(reading.get_timestamp() <= now + 1000000,
 				"device %d reading is timestamped in the future" % id)
 	_note("devices_with_reading", with_reading)
+	if with_reading == 0:
+		_skip("none of the %d connected device(s) returned a reading, so there was nothing to check" % devices.size())
+		return true
 	_pass_detail("%d of %d device(s) returned a consistent reading" % [with_reading, devices.size()])
 	return true
 
@@ -881,6 +884,13 @@ func _check_runtime_focus_policy() -> bool:
 func _check_runtime_aggregate_device() -> bool:
 	if not _require_runtime():
 		return true
+	# The aggregate only surfaces once it has a member, so count the gamepads
+	# it can cover before creating it.
+	var members := 0
+	for device in _gi.get_devices(_k("DEVICE_GAMEPAD")):
+		if device.get_device_family() != _d("FAMILY_AGGREGATE"):
+			members += 1
+	_note("member_gamepads", members)
 	var id: String = _gi.create_aggregate_device(_k("DEVICE_GAMEPAD"))
 	_note("app_local_id", id)
 	if not _expect(id.length() == 64 and id.is_valid_hex_number(), "create_aggregate_device returned '%s'" % id):
@@ -903,7 +913,10 @@ func _check_runtime_aggregate_device() -> bool:
 	_expect(again == id, "re-enabling the aggregate returned a different id")
 	_expect(_gi.disable_aggregate_device(again), "disabling the re-enabled aggregate failed")
 	if surfaced == null:
-		_pass_detail("aggregate gamepad created, disabled and re-enabled under the same id (no aggregate device surfaced within 1.5 s)")
+		if members > 0:
+			_expect(false, "the aggregate gamepad did not surface within 1.5 s although %d gamepad(s) are connected" % members)
+		else:
+			_skip("no gamepad is connected, so the aggregate had no member and did not surface (it was created, disabled and re-enabled under the same id)")
 		return true
 	var agg_name: String = surfaced.get_display_name()
 	_expect(not agg_name.is_empty() and not agg_name.begins_with("GameInput Device "),
@@ -1125,7 +1138,7 @@ func _check_vpad_aggregate_rumble() -> bool:
 		aggregate = _find_aggregate(id)
 	if aggregate == null:
 		_gi.disable_aggregate_device(id)
-		_skip("the aggregate gamepad did not surface within 1.5 s")
+		_expect(false, "the aggregate gamepad did not surface within 1.5 s although the virtual pad is connected")
 		return true
 	_note("aggregate_device_id", aggregate.get_device_id())
 	_note("aggregate_rumble_motors", aggregate.get_supported_rumble_motors())
