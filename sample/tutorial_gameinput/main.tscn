@@ -1,6 +1,7 @@
-[gd_scene load_steps=2 format=3 uid="uid://b8gameinputmain"]
+[gd_scene load_steps=3 format=3 uid="uid://b8gameinputmain"]
 
 [ext_resource type="Script" path="res://main.gd" id="1_main"]
+[ext_resource type="Script" path="res://inspector/gameinput_inspector.gd" id="2_inspector"]
 
 [node name="Main" type="Control"]
 layout_mode = 3
@@ -13,15 +14,14 @@ script = ExtResource("1_main")
 
 [node name="Root" type="VBoxContainer" parent="."]
 layout_mode = 1
-anchors_preset = 15
-anchor_right = 1.0
+anchors_preset = 9
+anchor_right = 0.5
 anchor_bottom = 1.0
-grow_horizontal = 2
 grow_vertical = 2
 offset_left = 24.0
 offset_top = 24.0
-offset_right = -24.0
-offset_bottom = -24.0
+offset_right = -12.0
+offset_bottom = -170.0
 
 [node name="Title" type="Label" parent="Root"]
 layout_mode = 2
@@ -30,7 +30,8 @@ theme_override_font_sizes/font_size = 24
 
 [node name="Subtitle" type="Label" parent="Root"]
 layout_mode = 2
-text = "A button → ui_accept + jump. Left stick → move_left / move_right. Keyboard fallback (A / D / Space) is additive."
+text = "A button → ui_accept + jump (the pad rumbles). Left stick → move_left / move_right. Keyboard fallback (A / D / Space) is additive."
+autowrap_mode = 3
 
 [node name="RuntimeStatus" type="Label" parent="Root"]
 layout_mode = 2
@@ -47,6 +48,7 @@ text = "Devices:"
 [node name="Devices" type="Label" parent="Root"]
 layout_mode = 2
 text = "(loading)"
+autowrap_mode = 3
 
 [node name="ActionStateLabel" type="Label" parent="Root"]
 layout_mode = 2
@@ -66,6 +68,33 @@ size_flags_vertical = 3
 bbcode_enabled = true
 scroll_following = true
 custom_minimum_size = Vector2(0, 120)
+
+[node name="Inspector" type="VBoxContainer" parent="."]
+layout_mode = 1
+anchors_preset = -1
+anchor_left = 0.5
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 0
+grow_vertical = 2
+offset_left = 12.0
+offset_top = 24.0
+offset_right = -24.0
+offset_bottom = -24.0
+script = ExtResource("2_inspector")
+
+[node name="Floor" type="ColorRect" parent="."]
+layout_mode = 1
+anchors_preset = -1
+anchor_top = 1.0
+anchor_right = 0.5
+anchor_bottom = 1.0
+grow_vertical = 0
+offset_left = 24.0
+offset_top = -24.0
+offset_right = -12.0
+offset_bottom = -22.0
+color = Color(0.35, 0.35, 0.4, 1)
 
 [node name="Player" type="ColorRect" parent="."]
 offset_left = 0.0
