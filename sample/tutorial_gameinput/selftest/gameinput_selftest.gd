@@ -347,7 +347,7 @@ func _on_watchdog() -> void:
 	if not _cur.is_empty():
 		_cur.failures.append("watchdog expired during this check")
 		_close_check(_cur.started_usec)
-	_finish(EXIT_WATCHDOG, "watchdog expired after %.0f s" % _options.timeout_sec)
+	_finish(EXIT_WATCHDOG, "watchdog expired after %.1f s" % _options.timeout_sec)
 
 
 ## Runs one check. The check returns true when it reached its end; a script
