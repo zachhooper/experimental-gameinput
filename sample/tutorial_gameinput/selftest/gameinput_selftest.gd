@@ -23,6 +23,8 @@ extends Node
 ##     --gameinput-vpad-log=<path>   vpad driver log, for the rumble round trip
 ##     --gameinput-session-locked    the runner saw a locked session (no input expected)
 ##     --gameinput-timeout=<sec>     watchdog, default 120
+##     --gameinput-run-id=<id>       copied into the report as run_id, so a runner
+##                                   can tell its own report from any other
 ##
 ## Check groups run in order: api, runtime (the real GameInput runtime), vpad
 ## (only with --gameinput-virtual-pad), then sample and mock. The last two swap
@@ -176,6 +178,7 @@ var _options := {
 	"vpad_log": "",
 	"session_locked": false,
 	"timeout_sec": DEFAULT_TIMEOUT_SEC,
+	"run_id": "",
 }
 var _results: Array = []
 var _cur: Dictionary = {}
@@ -185,7 +188,6 @@ var _finished: bool = false
 var _gi: Object = null
 var _has_seams: bool = false
 var _runtime_ready: bool = false
-var _native_device_count: int = -1
 var _vpad = null
 var _mock_ready: bool = false
 var _mock_saved: Dictionary = {}
@@ -292,6 +294,12 @@ func _parse_options() -> String:
 				unknown.append(arg)
 			else:
 				_options.timeout_sec = value.to_float()
+		elif arg.begins_with("--gameinput-run-id="):
+			var run_id := arg.substr("--gameinput-run-id=".length()).strip_edges()
+			if run_id.is_empty():
+				unknown.append(arg)
+			else:
+				_options.run_id = run_id
 		elif arg.begins_with("--gameinput-"):
 			unknown.append(arg)
 	if String(_options.report).strip_edges().is_empty():
@@ -360,17 +368,62 @@ func _on_watchdog() -> void:
 
 ## Runs one check. The check returns true when it reached its end; a script
 ## error aborts it early and returns null, which is reported as a failure.
+## An aborted check never ran its own clean-up, so the global state it may
+## have changed is put back before the next check starts.
 func _check(id: String, fn: Callable) -> void:
 	if _finished:
 		return
 	_cur = {"id": id, "failures": [], "skip": "", "detail": "", "data": {},
 			"started_usec": Time.get_ticks_usec()}
+	var baseline := _transient_state()
 	var completed = await fn.call()
 	if _finished or _cur.is_empty():
 		return
 	if completed != true:
 		_cur.failures.append("check aborted before completing (script error, see the log above)")
+		_note("reset_after_abort", _restore_transient_state(baseline))
 	_close_check(_cur.started_usec)
+
+
+## The global state a check may change and must put back: reading callback
+## kinds, focus policy and the sample mapper's target.
+func _transient_state() -> Dictionary:
+	var state := {}
+	if _gi != null:
+		state.callback_kinds = _gi.get_reading_callback_kinds()
+		state.focus_policy = _gi.get_focus_policy()
+	var mapper = sample.get_mapper() if sample != null else null
+	if mapper != null:
+		state.mapper_target = mapper.target_device_id
+	return state
+
+
+## Puts back what an aborted check changed and returns the names of the
+## values it reset. The mock time override has no getter, so it is always
+## cleared.
+func _restore_transient_state(baseline: Dictionary) -> Array:
+	var restored := []
+	if _gi == null:
+		return restored
+	if _has_seams:
+		_gi._test_set_time_override_usec(-1)
+		restored.append("time_override")
+	if baseline.has("callback_kinds") and _gi.get_reading_callback_kinds() != baseline.callback_kinds:
+		_gi.set_reading_callback_kinds(baseline.callback_kinds)
+		restored.append("callback_kinds")
+	if baseline.has("focus_policy") and _gi.get_focus_policy() != baseline.focus_policy:
+		_gi.set_focus_policy(baseline.focus_policy)
+		restored.append("focus_policy")
+	var mapper = sample.get_mapper() if sample != null else null
+	if mapper != null and baseline.has("mapper_target") and mapper.target_device_id != baseline.mapper_target:
+		mapper.target_device_id = baseline.mapper_target
+		restored.append("mapper_target")
+	if _gi.is_initialized():
+		for device in _gi.get_devices(_k("DEVICE_ANY")):
+			if device.is_vibrating():
+				device.stop_vibration()
+				restored.append("vibration:%d" % device.get_device_id())
+	return restored
 
 
 func _close_check(started_usec: int) -> void:
@@ -411,6 +464,7 @@ func _finish(forced_exit: int, message: String) -> void:
 			exit_code = EXIT_PASS
 	var report := {
 		"schema": SCHEMA,
+		"run_id": _options.run_id,
 		"started_utc": _started_utc,
 		"finished_utc": _utc_now(),
 		"duration_ms": Time.get_ticks_msec() - _started_ms,
@@ -552,6 +606,10 @@ func _write_text(path: String, text: String) -> String:
 		return "cannot open %s (%s)" % [path, error_string(FileAccess.get_open_error())]
 	file.store_string(text + "\n")
 	file.close()
+	# A full disk can truncate the file without failing open(), so read it
+	# back: a report that is not exactly what was written is not a report.
+	if FileAccess.get_file_as_string(path) != text + "\n":
+		return "%s did not read back as written (disk full or file locked?)" % path
 	return ""
 
 
@@ -776,7 +834,6 @@ func _check_runtime_devices() -> bool:
 	if not _require_runtime():
 		return true
 	var devices: Array = _gi.get_devices(_k("DEVICE_ANY"))
-	_native_device_count = devices.size()
 	_expect(_gi.get_connected_device_count(_k("DEVICE_ANY")) == devices.size(),
 			"get_connected_device_count(DEVICE_ANY) disagrees with get_devices(DEVICE_ANY)")
 	var summaries := []
@@ -839,9 +896,11 @@ func _check_runtime_readings() -> bool:
 		with_reading += 1
 		var id: int = device.get_device_id()
 		_expect(reading.get_device_id() == id, "reading of device %d carries id %d" % [id, reading.get_device_id()])
+		_expect(reading.get_input_kinds() != 0, "device %d returned a reading with no input kinds" % id)
 		_expect(reading.get_input_kinds() & ~device.get_kind_mask() == 0,
 				"device %d reading kinds %s exceed the device kinds %s" % [id,
 				_kinds_to_string(reading.get_input_kinds()), _kinds_to_string(device.get_kind_mask())])
+		_expect(reading.get_timestamp() > 0, "device %d reading has no timestamp" % id)
 		_expect(reading.get_timestamp() <= now + 1000000,
 				"device %d reading is timestamped in the future" % id)
 	_note("devices_with_reading", with_reading)
@@ -861,10 +920,12 @@ func _check_runtime_reading_callbacks() -> bool:
 	await _frames(3)
 	var dropped: int = _gi.get_dropped_reading_count()
 	_expect(dropped >= 0, "negative dropped-reading count")
-	_gi.set_reading_callback_kinds(previous)
+	_expect(_gi.set_reading_callback_kinds(previous), "restoring the reading callback kinds failed")
 	_expect(_gi.get_reading_callback_kinds() == previous, "callback kinds were not restored")
 	_note("dropped", dropped)
-	_pass_detail("reading callback registered and restored")
+	# Delivery needs live input: vpad.input checks it through the native
+	# callback and mock.event_readings through the queue.
+	_pass_detail("reading callback registered and restored (delivery is checked by vpad.input and mock.event_readings)")
 	return true
 
 
@@ -999,26 +1060,37 @@ func _check_runtime_haptics() -> bool:
 
 # ── vpad (a ViGEm Xbox 360 pad driven by tools/virtual_gamepad) ─────────
 
-func _find_vpad():
+## Every connected gamepad with the virtual pad's VID:PID. Aggregates are left
+## out: they mirror their members and are not the pad itself.
+func _find_vpads() -> Array:
+	var found := []
 	for device in _gi.get_devices(_k("DEVICE_ANY")):
 		var info: Dictionary = device.get_device_info()
 		if info.get("vendor_id", 0) == VPAD_VENDOR_ID and info.get("product_id", 0) == VPAD_PRODUCT_ID \
-				and device.get_kind_mask() & _k("DEVICE_GAMEPAD") != 0:
-			return device
-	return null
+				and device.get_kind_mask() & _k("DEVICE_GAMEPAD") != 0 \
+				and device.get_device_family() != _d("FAMILY_AGGREGATE"):
+			found.append(device)
+	return found
 
 
 func _check_vpad_present() -> bool:
 	if not _require_runtime():
 		return true
 	var deadline := Time.get_ticks_msec() + int(VPAD_WAIT_SEC * 1000)
-	_vpad = _find_vpad()
-	while _vpad == null and Time.get_ticks_msec() < deadline:
+	var found := _find_vpads()
+	while found.is_empty() and Time.get_ticks_msec() < deadline:
 		await _frames(5)
-		_vpad = _find_vpad()
-	if not _expect(_vpad != null, "no %s:%s gamepad appeared within %.0f s (is the vpad driver running?)" % [
+		found = _find_vpads()
+	if not _expect(not found.is_empty(), "no %s:%s gamepad appeared within %.0f s (is the vpad driver running?)" % [
 			_hex4(VPAD_VENDOR_ID), _hex4(VPAD_PRODUCT_ID), VPAD_WAIT_SEC]):
 		return true
+	# A real Xbox 360 pad has the same VID:PID, and the checks below would
+	# not know which device the driver is moving.
+	if not _expect(found.size() == 1, "%d gamepads report %s:%s (%s); unplug other Xbox 360 pads so the virtual pad is the only one" % [
+			found.size(), _hex4(VPAD_VENDOR_ID), _hex4(VPAD_PRODUCT_ID),
+			", ".join(PackedStringArray(found.map(func(d): return "%d %s" % [d.get_device_id(), d.get_display_name()])))]):
+		return true
+	_vpad = found[0]
 	_note("device_id", _vpad.get_device_id())
 	_pass_detail("virtual pad is device %d (%s)" % [_vpad.get_device_id(), _vpad.get_display_name()])
 	return true
@@ -1051,7 +1123,7 @@ func _check_vpad_input() -> bool:
 	var previous_target: int = mapper.target_device_id if mapper != null else -1
 	# Headless Godot has no window, so ask for input while unfocused.
 	_gi.set_focus_policy(_k("FOCUS_POLICY_ENABLE_BACKGROUND_INPUT"))
-	_gi.set_reading_callback_kinds(_k("DEVICE_GAMEPAD"))
+	_expect(_gi.set_reading_callback_kinds(_k("DEVICE_GAMEPAD")), "RegisterReadingCallback failed")
 	if mapper != null:
 		mapper.target_device_id = _vpad.get_device_id()
 	_events.clear()
@@ -1085,7 +1157,7 @@ func _check_vpad_input() -> bool:
 		_events.clear()
 	if mapper != null:
 		mapper.target_device_id = previous_target
-	_gi.set_reading_callback_kinds(previous_kinds)
+	_expect(_gi.set_reading_callback_kinds(previous_kinds), "restoring the reading callback kinds failed")
 	_gi.set_focus_policy(previous_policy)
 	_note("seen", seen)
 	_note("timestamp_changed", timestamp_changed)
@@ -1226,11 +1298,15 @@ func _check_mock_session() -> bool:
 	if not _has_seams:
 		_skip("mock seams are compiled out of release builds; sample and mock checks are skipped")
 		return true
+	var mapper = sample.get_mapper() if sample != null else null
 	_mock_saved = {
 		"initialized": _gi.is_initialized(),
 		"callback_kinds": _gi.get_reading_callback_kinds(),
 		"focus_policy": _gi.get_focus_policy(),
+		"app_local_ids": _device_identities(),
+		"mapper_target": mapper.target_device_id if mapper != null else null,
 	}
+	_note("native_devices", _mock_saved.app_local_ids.size())
 	_gi.shutdown()
 	_gi.set_reading_callback_kinds(0)
 	_gi.set_focus_policy(0)
@@ -1255,12 +1331,15 @@ func _check_sample_hotplug_ui() -> bool:
 	var connected := _named("device_connected")
 	_expect(connected.size() == 1 and connected[0][1].get_device_id() == _mock_pad_id,
 			"device_connected did not fire once for the injected pad")
-	if sample != null:
-		_expect(sample.get_devices_text().contains("Selftest Pad"), "the sample's device list does not show the pad")
-		_expect(sample.get_device_count_text().ends_with(": 1"),
-				"the sample's gamepad count reads '%s'" % sample.get_device_count_text())
-		_expect(sample.get_hotplug_text().contains("connected: id=%d" % _mock_pad_id),
-				"the sample's hot-plug log does not show the connect")
+	# main.gd hands the self-test its scene. Without it every sample.* check
+	# would skip, so a broken hand-off is a failure, not a missing feature.
+	if not _expect(sample != null, "the self-test was not given the tutorial scene (main.gd sets self_test.sample)"):
+		return true
+	_expect(sample.get_devices_text().contains("Selftest Pad"), "the sample's device list does not show the pad")
+	_expect(sample.get_device_count_text().ends_with(": 1"),
+			"the sample's gamepad count reads '%s'" % sample.get_device_count_text())
+	_expect(sample.get_hotplug_text().contains("connected: id=%d" % _mock_pad_id),
+			"the sample's hot-plug log does not show the connect")
 	_pass_detail("injected pad reached device_connected and the sample UI on the next frame")
 	return true
 
@@ -1364,7 +1443,10 @@ func _check_sample_inspector() -> bool:
 	_gi._test_push_reading(_mock_pad_id, {"gamepad": {}})
 	await _frames(1)
 	_check_inspector_rumble_buttons(inspector)
-	_pass_detail("inspector lists the pad, renders its live state, and its Rumble, Triggers and Stop buttons drive the motors")
+	_check_inspector_toggles(inspector)
+	await _check_inspector_force_feedback(inspector)
+	_pass_detail("inspector lists the pad and renders its live state; Rumble, Triggers and Stop drive the motors, "
+			+ "the two toggles set the callback kinds and focus policy, and Force feedback pulse runs an effect until Stop")
 	return true
 
 
@@ -1398,6 +1480,76 @@ func _check_inspector_rumble_buttons(inspector) -> void:
 	_expect_near(triggers.low, 0.0, "Triggers leaves the strong motor off")
 	stop_button.pressed.emit()
 	_expect(not _gi._test_get_last_rumble(_mock_pad_id).active, "pressing Stop did not stop the motors")
+
+
+func _last_inspector_log(inspector) -> String:
+	var lines: Array = inspector.get_log_lines()
+	return str(lines.back()) if not lines.is_empty() else ""
+
+
+# Clicks the inspector's two check boxes (their `toggled` signals) and reads
+# the singleton state back, then puts the state back as it was.
+func _check_inspector_toggles(inspector) -> void:
+	var events: CheckBox = inspector.get_toggle("events")
+	var background: CheckBox = inspector.get_toggle("background")
+	if not _expect(events != null and background != null,
+			"the inspector does not expose its Event-driven readings and Background input toggles"):
+		return
+	var kinds_before: int = _gi.get_reading_callback_kinds()
+	var policy_before: int = _gi.get_focus_policy()
+	var bg := _k("FOCUS_POLICY_ENABLE_BACKGROUND_INPUT")
+
+	_gi.set_reading_callback_kinds(0)
+	events.set_pressed_no_signal(false)
+	events.button_pressed = true
+	_expect(_gi.get_reading_callback_kinds() == _k("DEVICE_ANY"),
+			"Event-driven readings on set callback kinds %d, expected DEVICE_ANY" % _gi.get_reading_callback_kinds())
+	_expect(_last_inspector_log(inspector) == "event-driven readings on",
+			"the inspector logged \"%s\" for Event-driven readings" % _last_inspector_log(inspector))
+	events.button_pressed = false
+	_expect(_gi.get_reading_callback_kinds() == 0, "Event-driven readings off left the callback kinds on")
+
+	_gi.set_focus_policy(policy_before & ~bg)
+	background.set_pressed_no_signal(false)
+	background.button_pressed = true
+	_expect(_gi.get_focus_policy() == (policy_before | bg),
+			"Background input on set focus policy %d, expected %d" % [_gi.get_focus_policy(), policy_before | bg])
+	background.button_pressed = false
+	_expect(_gi.get_focus_policy() == (policy_before & ~bg), "Background input off did not clear only the background flag")
+
+	_expect(_gi.set_reading_callback_kinds(kinds_before), "restoring the reading callback kinds failed")
+	_gi.set_focus_policy(policy_before)
+	events.set_pressed_no_signal(kinds_before != 0)
+	background.set_pressed_no_signal(policy_before & bg != 0)
+
+
+# Selects a mock wheel with one force-feedback motor, presses Force feedback
+# pulse and follows the effect until Stop releases it.
+func _check_inspector_force_feedback(inspector) -> void:
+	var button: Button = inspector.get_action_button("force_feedback")
+	var wheel = _mock_device("DEVICE_RACING_WHEEL", {"name": "Inspector Wheel", "ffb_motors": [{}]})
+	if not _expect(button != null and wheel != null, "the inspector's Force feedback button or the mock wheel is missing"):
+		return
+	var wheel_id: int = wheel.get_device_id()
+	await _frames(1)
+	if _expect(inspector.select_device(wheel_id), "the inspector does not list the force-feedback wheel"):
+		_expect(not button.disabled, "Force feedback pulse is disabled for a wheel with a motor")
+		var effects_before: int = _gi._test_get_effect_count()
+		button.pressed.emit()
+		var effect = inspector.get_active_effect()
+		_note("inspector_ffb_log", _last_inspector_log(inspector))
+		if _expect(effect != null and effect.is_valid(), "pressing Force feedback pulse left no valid effect"):
+			_expect(effect.get_state() == _c("GameInputForceFeedbackEffect", "STATE_RUNNING"),
+					"the inspector's effect is not running")
+			_expect(_gi._test_get_effect_count() == effects_before + 1, "the inspector's effect is not registered")
+		_expect(_last_inspector_log(inspector).begins_with("constant force 0.3"),
+				"the inspector logged \"%s\" for Force feedback pulse" % _last_inspector_log(inspector))
+		inspector.get_action_button("stop").pressed.emit()
+		_expect(inspector.get_active_effect() == null, "Stop did not release the inspector's effect")
+		_expect(_gi._test_get_effect_count() == effects_before, "Stop left the force-feedback effect registered")
+	_gi._test_remove_device(wheel_id)
+	_gi._test_force_poll()
+	inspector.select_device(_mock_pad_id)
 
 
 func _check_sample_disconnect_releases() -> bool:
@@ -1507,10 +1659,11 @@ func _check_mock_device_kinds() -> bool:
 func _check_mock_event_readings() -> bool:
 	if not _require_mock():
 		return true
-	_expect(_gi.set_reading_callback_kinds(_k("DEVICE_GAMEPAD")), "set_reading_callback_kinds failed")
+	# Inject first so a failed injection returns with nothing to put back.
 	var pad = _mock_device("DEVICE_GAMEPAD", {"name": "Tap Pad"})
 	if not _expect(pad != null, "gamepad injection failed"):
 		return true
+	_expect(_gi.set_reading_callback_kinds(_k("DEVICE_GAMEPAD")), "set_reading_callback_kinds failed")
 	var a := _d("BUTTON_A")
 	_events.clear()
 	# A full tap between two polls: a polled game would miss it entirely.
@@ -1525,7 +1678,7 @@ func _check_mock_event_readings() -> bool:
 		_expect(readings[1].get_timestamp() == 2000, "event readings keep their timestamps")
 	_expect(_gi.get_buffered_readings(pad).size() == 2, "get_buffered_readings does not hold both readings")
 	_expect(not _gi.get_current_reading(pad).is_button_down(a), "the polled reading should show A up")
-	_gi.set_reading_callback_kinds(0)
+	_expect(_gi.set_reading_callback_kinds(0), "turning reading callbacks off failed")
 	_gi._test_remove_device(pad.get_device_id())
 	_gi._test_force_poll()
 	_pass_detail("a sub-frame tap produced press and release events and two buffered readings")
@@ -1623,12 +1776,16 @@ func _check_mock_force_feedback() -> bool:
 	return true
 
 
+## Puts the native runtime back after the mock tier. Device ids are handed out
+## per session, so the devices are matched by app-local id, which GameInput
+## keeps for a device. The setters used here also mark both values as set in
+## code; the process quits right after the self-test, so nothing sees that.
 func _check_mock_restore() -> bool:
 	if not _has_seams or _mock_saved.is_empty():
 		_skip("the mock session never started")
 		return true
 	_gi.shutdown()
-	_gi.set_reading_callback_kinds(_mock_saved.callback_kinds)
+	_expect(_gi.set_reading_callback_kinds(_mock_saved.callback_kinds), "restoring the reading callback kinds failed")
 	_gi.set_focus_policy(_mock_saved.focus_policy)
 	_mock_ready = false
 	if not _mock_saved.initialized:
@@ -1637,16 +1794,53 @@ func _check_mock_restore() -> bool:
 		return true
 	_expect(_gi.initialize(), "re-initializing native GameInput failed")
 	_expect(_gi._test_get_backend() == 1, "the native backend is not active again")
-	if _native_device_count >= 0:
-		var deadline := Time.get_ticks_msec() + 2000
-		var count := -1
-		while Time.get_ticks_msec() < deadline:
-			await _frames(2)
-			count = _gi.get_devices(_k("DEVICE_ANY")).size()
-			if count >= _native_device_count:
-				break
-		_note("devices_after_restore", count)
-		_expect(count >= _native_device_count, "%d device(s) came back after re-initializing, expected %d" % [
-				count, _native_device_count])
-	_pass_detail("native GameInput re-initialized and its devices re-enumerated")
+	_expect(_gi.get_reading_callback_kinds() == _mock_saved.callback_kinds,
+			"reading callback kinds are %d after re-initializing, expected %d" % [
+			_gi.get_reading_callback_kinds(), _mock_saved.callback_kinds])
+	_expect(_gi.get_focus_policy() == _mock_saved.focus_policy, "focus policy is %d after re-initializing, expected %d" % [
+			_gi.get_focus_policy(), _mock_saved.focus_policy])
+	var mapper = sample.get_mapper() if sample != null else null
+	if mapper != null and _mock_saved.mapper_target != null:
+		_expect(mapper.target_device_id == _mock_saved.mapper_target, "the sample mapper targets %d, expected %d" % [
+				mapper.target_device_id, _mock_saved.mapper_target])
+	var expected: Array = _mock_saved.app_local_ids
+	var missing := expected
+	var deadline := Time.get_ticks_msec() + 2000
+	while true:
+		await _frames(2)
+		missing = _missing_identities(expected, _device_identities())
+		if missing.is_empty() or Time.get_ticks_msec() >= deadline:
+			break
+	var after := _device_identities()
+	_note("devices_before", expected.size())
+	_note("devices_after", after.size())
+	_expect(missing.is_empty(), "%d of %d device(s) did not come back after re-initializing (app-local ids %s)" % [
+			missing.size(), expected.size(), ", ".join(PackedStringArray(missing.map(func(s): return String(s).left(12) + "…")))])
+	_pass_detail("native GameInput re-initialized: the same %d device(s) by app-local id, callback kinds, focus policy and mapper target" % expected.size())
 	return true
+
+
+## The app-local ids of the connected devices, sorted. Aggregates are left out
+## because they belong to the session that created them.
+func _device_identities() -> Array:
+	var ids := []
+	if _gi != null and _gi.is_initialized():
+		for device in _gi.get_devices(_k("DEVICE_ANY")):
+			if device.get_device_family() != _d("FAMILY_AGGREGATE"):
+				ids.append(String(device.get_app_local_id()))
+	ids.sort()
+	return ids
+
+
+## The entries of [param expected] that [param actual] lacks, counting
+## duplicates: two identical pads need two matching devices.
+func _missing_identities(expected: Array, actual: Array) -> Array:
+	var left := actual.duplicate()
+	var missing := []
+	for id in expected:
+		var at := left.find(id)
+		if at < 0:
+			missing.append(id)
+		else:
+			left.remove_at(at)
+	return missing

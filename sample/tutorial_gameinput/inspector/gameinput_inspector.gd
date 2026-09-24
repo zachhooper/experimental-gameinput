@@ -152,6 +152,23 @@ func get_action_button(action: String) -> Button:
 	return null
 
 
+## The check box named [param toggle]: "events" or "background". Returns null
+## for any other name.
+func get_toggle(toggle: String) -> CheckBox:
+	match toggle:
+		"events":
+			return _events_toggle
+		"background":
+			return _background_toggle
+	return null
+
+
+## The force-feedback effect the Force feedback pulse button started, or null
+## once it has been released.
+func get_active_effect():
+	return _effect
+
+
 ## The event log, oldest line first.
 func get_log_lines() -> Array:
 	return _log_lines.duplicate()
@@ -427,8 +444,14 @@ func _on_ffb_pressed() -> void:
 
 
 func _on_events_toggled(pressed: bool) -> void:
-	_gi.set_reading_callback_kinds(_c("GameInput", "DEVICE_ANY") if pressed else 0)
-	_append_log("event-driven readings %s" % ("on" if pressed else "off"))
+	if _gi.set_reading_callback_kinds(_c("GameInput", "DEVICE_ANY") if pressed else 0):
+		_append_log("event-driven readings %s" % ("on" if pressed else "off"))
+		return
+	# The kinds read back as requested even when registration failed, so turn
+	# them off again rather than leave a toggle on that delivers nothing.
+	_gi.set_reading_callback_kinds(0)
+	_events_toggle.set_pressed_no_signal(false)
+	_append_log("GameInput refused event-driven readings (RegisterReadingCallback failed)")
 
 
 func _on_background_toggled(pressed: bool) -> void:

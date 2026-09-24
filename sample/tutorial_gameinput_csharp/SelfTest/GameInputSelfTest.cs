@@ -31,7 +31,9 @@ namespace TutorialGameInputCSharp.SelfTest;
 ///
 /// Options (after <c>--</c>): <c>--gameinput-report=&lt;path&gt;</c>,
 /// <c>--gameinput-strict</c>, <c>--gameinput-session-locked</c>,
-/// <c>--gameinput-timeout=&lt;sec&gt;</c>. The virtual-pad checks live in the
+/// <c>--gameinput-timeout=&lt;sec&gt;</c>, <c>--gameinput-run-id=&lt;id&gt;</c>
+/// (copied into the report as <c>run_id</c>, so a runner can tell its own
+/// report from any other). The virtual-pad checks live in the
 /// GDScript harness only.
 /// </summary>
 public partial class GameInputSelfTest : Node
@@ -70,6 +72,7 @@ public partial class GameInputSelfTest : Node
     private bool _strict;
     private bool _sessionLocked;
     private double _timeoutSec = DefaultTimeoutSec;
+    private string _runId = "";
 
     private Check _cur;
     private ulong _startedMs;
@@ -78,12 +81,12 @@ public partial class GameInputSelfTest : Node
     private GodotObject _gi;
     private bool _hasSeams;
     private bool _runtimeReady;
-    private int _nativeDeviceCount = -1;
     private bool _mockReady;
     private bool _mockStarted;
     private bool _savedInitialized;
     private GameInput.DeviceKind _savedCallbackKinds;
     private GameInput.FocusPolicy _savedFocusPolicy;
+    private List<string> _savedAppLocalIds = new();
     private long _mockPadId = -1;
     private Godot.Collections.Dictionary _display = new();
 
@@ -209,6 +212,18 @@ public partial class GameInputSelfTest : Node
                     bad.Add(arg);
                 }
             }
+            else if (arg.StartsWith("--gameinput-run-id=", StringComparison.Ordinal))
+            {
+                string runId = arg.Substring("--gameinput-run-id=".Length).Trim();
+                if (runId.Length == 0)
+                {
+                    bad.Add(arg);
+                }
+                else
+                {
+                    _runId = runId;
+                }
+            }
             else if (arg == "--gameinput-virtual-pad" || arg.StartsWith("--gameinput-vpad-log=", StringComparison.Ordinal))
             {
                 bad.Add(arg + " (the virtual-pad checks are in the GDScript sample)");
@@ -234,6 +249,7 @@ public partial class GameInputSelfTest : Node
         { "strict", _strict },
         { "session_locked", _sessionLocked },
         { "timeout_sec", _timeoutSec },
+        { "run_id", _runId },
     };
 
     // The headless display server shrinks the root viewport to 64x64 after the
@@ -355,6 +371,7 @@ public partial class GameInputSelfTest : Node
         {
             { "schema", Schema },
             { "harness", "csharp" },
+            { "run_id", _runId },
             { "started_utc", _startedUtc },
             { "finished_utc", UtcNow() },
             { "duration_ms", (long)(Time.GetTicksMsec() - _startedMs) },
@@ -437,6 +454,7 @@ public partial class GameInputSelfTest : Node
         Expect(_gi != null && _gi.IsClass("GameInput"), "the engine singleton is not a GameInput");
         Note("singleton_name", GameInput.SingletonName);
         int compared = 0;
+        var matched = new Dictionary<Type, HashSet<string>>();
         foreach ((string native, Type managed) in MirroredClasses)
         {
             if (!Expect(ClassDB.ClassExists(native), $"the extension does not register {native}"))
@@ -468,11 +486,35 @@ public partial class GameInputSelfTest : Node
                     Expect(managedValue == value,
                         $"{native}.{constant} is {value} but {managed.Name}.{enumName}.{match} is {managedValue}");
                     compared++;
+                    if (!matched.TryGetValue(enumType, out HashSet<string> names))
+                    {
+                        names = new HashSet<string>();
+                        matched[enumType] = names;
+                    }
+
+                    names.Add(match);
+                }
+            }
+
+            // The other direction: a managed enum or member that no native
+            // constant matched is a stale copy the extension does not have.
+            foreach (Type enumType in managed.GetNestedTypes().Where(t => t.IsEnum))
+            {
+                if (!Expect(matched.TryGetValue(enumType, out HashSet<string> seen),
+                        $"{managed.Name}.{enumType.Name} mirrors no native enum"))
+                {
+                    continue;
+                }
+
+                foreach (string name in Enum.GetNames(enumType).Where(n => !seen.Contains(n)))
+                {
+                    Expect(false, $"{managed.Name}.{enumType.Name}.{name} has no native constant");
                 }
             }
         }
 
         Note("constants_compared", compared);
+        Note("enums_compared", matched.Count);
         Expect(compared > 0, "no constants were compared");
 
         // The static helpers go through ClassDB.ClassCallStatic and need no device.
@@ -481,7 +523,7 @@ public partial class GameInputSelfTest : Node
         Expect(GameInputDevice.VirtualKeyToKeycode(0x41) == Key.A, "virtual key 0x41 is not Key.A");
         Expect(GameInputDevice.SwitchPositionToVector(GameInputDevice.SwitchPosition.Up) == new Vector2(0, -1),
             "SwitchPosition.Up is not Vector2(0, -1)");
-        PassDetail($"facade loaded; all {compared} native constants match the C# enums; static helpers convert");
+        PassDetail($"facade loaded; all {compared} native constants match the C# enums one to one; static helpers convert");
         return Task.CompletedTask;
     }
 
@@ -539,7 +581,6 @@ public partial class GameInputSelfTest : Node
         }
 
         IReadOnlyList<GameInputDevice> devices = GameInput.GetDevices(GameInput.DeviceKind.Any);
-        _nativeDeviceCount = devices.Count;
         Expect(GameInput.GetConnectedDeviceCount(GameInput.DeviceKind.Any) == devices.Count,
             "GetConnectedDeviceCount(Any) disagrees with GetDevices(Any)");
         var ids = new HashSet<long>();
@@ -577,6 +618,8 @@ public partial class GameInputSelfTest : Node
         _savedInitialized = GameInput.IsInitialized;
         _savedCallbackKinds = GameInput.ReadingCallbackKinds;
         _savedFocusPolicy = GameInput.GetFocusPolicy();
+        _savedAppLocalIds = DeviceIdentities();
+        Note("native_devices", _savedAppLocalIds.Count);
         _mockStarted = true;
         GameInput.Shutdown();
         GameInput.SetReadingCallbackKinds(GameInput.DeviceKind.Unknown);
@@ -818,6 +861,8 @@ public partial class GameInputSelfTest : Node
             List<object[]> layout = Named("keyboard_layout_changed");
             if (Expect(layout.Count == 1, $"expected one KeyboardLayoutChanged, got {layout.Count}"))
             {
+                Expect((layout[0][0] as GameInputDevice)?.DeviceId == keyboard.DeviceId,
+                    "KeyboardLayoutChanged carries the wrong device");
                 Expect((long)layout[0][1] == 0x0407 && (long)layout[0][2] == 0x0409, "layout 0x0409 -> 0x0407");
                 verified.Add("KeyboardLayoutChanged");
             }
@@ -825,6 +870,8 @@ public partial class GameInputSelfTest : Node
             List<object[]> status = Named("device_status_changed");
             if (Expect(status.Count == 1, $"expected one DeviceStatusChanged, got {status.Count}"))
             {
+                Expect((status[0][0] as GameInputDevice)?.DeviceId == pad.DeviceId,
+                    "DeviceStatusChanged carries the wrong device");
                 Expect((GameInputDevice.DeviceStatus)status[0][1] == ready &&
                        (GameInputDevice.DeviceStatus)status[0][2] == GameInputDevice.DeviceStatus.Connected,
                     $"status {status[0][1]} previous {status[0][2]}");
@@ -961,6 +1008,8 @@ public partial class GameInputSelfTest : Node
         PassDetail("Main stops handling GameInput events out of the tree and resumes when it re-enters");
     }
 
+    // Device ids are handed out per session, so the devices that come back are
+    // matched by app-local id, which GameInput keeps for a device.
     private async Task CheckMockRestore()
     {
         if (!_hasSeams || !_mockStarted)
@@ -970,7 +1019,7 @@ public partial class GameInputSelfTest : Node
         }
 
         GameInput.Shutdown();
-        GameInput.SetReadingCallbackKinds(_savedCallbackKinds);
+        Expect(GameInput.SetReadingCallbackKinds(_savedCallbackKinds), "restoring the reading callback kinds failed");
         GameInput.SetFocusPolicy(_savedFocusPolicy);
         _mockReady = false;
         if (!_savedInitialized)
@@ -982,26 +1031,62 @@ public partial class GameInputSelfTest : Node
 
         Expect(GameInput.Initialize(), "re-initializing native GameInput failed");
         Expect(_gi.Call("_test_get_backend").AsInt32() == BackendNative, "the native backend is not active again");
-        if (_nativeDeviceCount >= 0)
+        Expect(GameInput.ReadingCallbackKinds == _savedCallbackKinds,
+            $"reading callback kinds are {GameInput.ReadingCallbackKinds} after re-initializing, expected {_savedCallbackKinds}");
+        Expect(GameInput.GetFocusPolicy() == _savedFocusPolicy,
+            $"focus policy is {GameInput.GetFocusPolicy()} after re-initializing, expected {_savedFocusPolicy}");
+        List<string> missing = _savedAppLocalIds;
+        ulong deadline = Time.GetTicksMsec() + 2000;
+        while (true)
         {
-            ulong deadline = Time.GetTicksMsec() + 2000;
-            int count = -1;
-            while (Time.GetTicksMsec() < deadline)
+            await Frames(2);
+            missing = MissingIdentities(_savedAppLocalIds, DeviceIdentities());
+            if (missing.Count == 0 || Time.GetTicksMsec() >= deadline)
             {
-                await Frames(2);
-                count = GameInput.GetDevices(GameInput.DeviceKind.Any).Count;
-                if (count >= _nativeDeviceCount)
-                {
-                    break;
-                }
+                break;
             }
-
-            Note("devices_after_restore", count);
-            Expect(count >= _nativeDeviceCount,
-                $"{count} device(s) came back after re-initializing, expected {_nativeDeviceCount}");
         }
 
-        PassDetail("native GameInput re-initialized and its devices re-enumerated");
+        Note("devices_before", _savedAppLocalIds.Count);
+        Note("devices_after", DeviceIdentities().Count);
+        Expect(missing.Count == 0,
+            $"{missing.Count} of {_savedAppLocalIds.Count} device(s) did not come back after re-initializing " +
+            $"(app-local ids {string.Join(", ", missing.Select(id => id[..Math.Min(12, id.Length)] + "…"))})");
+        PassDetail($"native GameInput re-initialized: the same {_savedAppLocalIds.Count} device(s) by app-local id, " +
+            "callback kinds and focus policy");
+    }
+
+    // The app-local ids of the connected devices, sorted. Aggregates are left
+    // out because they belong to the session that created them.
+    private static List<string> DeviceIdentities()
+    {
+        if (!GameInput.IsInitialized)
+        {
+            return new List<string>();
+        }
+
+        return GameInput.GetDevices(GameInput.DeviceKind.Any)
+            .Where(d => d.Family != GameInputDevice.DeviceFamily.Aggregate)
+            .Select(d => d.AppLocalId)
+            .OrderBy(id => id, StringComparer.Ordinal)
+            .ToList();
+    }
+
+    // The entries of expected that actual lacks, counting duplicates: two
+    // identical pads need two matching devices.
+    private static List<string> MissingIdentities(List<string> expected, List<string> actual)
+    {
+        var left = new List<string>(actual);
+        var missing = new List<string>();
+        foreach (string id in expected)
+        {
+            if (!left.Remove(id))
+            {
+                missing.Add(id);
+            }
+        }
+
+        return missing;
     }
 
     // ── Event recording ───────────────────────────────────────────────────
