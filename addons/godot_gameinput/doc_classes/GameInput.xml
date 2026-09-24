@@ -6,21 +6,27 @@
 	<description>
 		[GameInput] is the engine singleton that owns the [code]IGameInput[/code] runtime, the device cache, and main-thread poll dispatch. Access it from GDScript with [code]Engine.get_singleton("GameInput")[/code]. Lifecycle is normally driven by the [code]GameInputBootstrap[/code] autoload that the editor plugin installs; that autoload reads the project settings [code]game_input/runtime/initialize_on_startup[/code] and [code]game_input/runtime/auto_poll[/code] to decide whether to call [method initialize] at startup and [method poll] every frame.
 		The engine singleton name is configurable through the Project Setting [code]game_input/runtime/singleton_name[/code] (default [code]GameInput[/code]), for titles that need to avoid a name collision or prefer a project-specific global. Set it before the extension loads — it is read once at extension initialization, so changes require a restart. Values that are empty or not a valid ASCII identifier, or that collide with an already-registered singleton, are rejected with a warning and the default [code]GameInput[/code] is used instead. When renamed, resolve the singleton with [code]Engine.get_singleton(ProjectSettings.get_setting("game_input/runtime/singleton_name", "GameInput"))[/code].
-		All public methods on this class are GDScript-safe: when called before [method initialize] succeeds, after [method shutdown], or when [code]GameInputCreate()[/code] failed on this host, they soft-fail instead of crashing. [method poll] becomes a no-op in that state and does not emit a warning, while data-returning methods return safe defaults ([code]false[/code], an empty [Array], [code]null[/code], [code]-1.0[/code]) and emit a single [code]push_warning[/code] per process to flag the misuse.
-		Device-callback events from the GameInput worker thread are queued and only applied on the main thread inside [method poll], so the [signal device_connected] and [signal device_disconnected] signals are always emitted on the main thread.
+		All public methods on this class are GDScript-safe: when called before [method initialize] succeeds, after [method shutdown], or when [code]GameInputCreate()[/code] failed on this host, they soft-fail instead of crashing. [method poll] becomes a no-op in that state and does not emit a warning, while data-returning methods return safe defaults ([code]false[/code], [code]0[/code], an empty [Array], [code]null[/code], [code]-1.0[/code]) and emit a single [code]push_warning[/code] per process to flag the misuse.
+		Every device is tracked, whatever its kind: gamepads, keyboards, mice, arcade sticks, flight sticks, racing wheels, motion sensors and generic controllers. Filter them with the [enum DeviceKind] flags. [constant DEVICE_ALL] keeps its original meaning (gamepads, keyboards and mice) so existing projects behave the same; [constant DEVICE_ANY] matches every kind.
+		GameInput reports device connections, status changes, Guide and Share presses, keyboard layout changes and, when enabled with [method set_reading_callback_kinds], individual readings on worker threads. The addon only queues those events there. [method poll] drains the queues on the main thread in the order the events happened, so every signal on this class is emitted on the main thread.
+		Timestamps passed to the signals and returned by [method get_current_timestamp] and [method GameInputReading.get_timestamp] are microseconds on the GameInput clock. They are comparable with each other, not with [method Time.get_ticks_usec].
+		When the engine quits, the addon shuts the runtime down and disconnects every connection to these signals before the script languages are torn down, so lambdas that are still connected cannot crash the process on exit.
 	</description>
 	<tutorials></tutorials>
 	<methods>
 		<method name="initialize">
 			<return type="bool" />
 			<description>
-				Creates the underlying [code]IGameInput[/code] runtime and registers the device-connection callback. Returns [code]true[/code] on success, or [code]false[/code] if [code]GameInputCreate()[/code] failed (in which case the singleton stays in disabled mode and every other method returns a safe default). Calling this when already initialized is a no-op and returns [code]true[/code].
+				Creates the underlying [code]IGameInput[/code] runtime, applies the focus policy, and registers the device callback for every device kind. Devices that are already connected are queued during this call and reported by [signal device_connected] on the next [method poll]. The Guide/Share button and keyboard layout callbacks are registered as well; if the platform refuses one, it is skipped with a verbose log line and the matching signal never fires. Reading callbacks start if [method get_reading_callback_kinds] is not [code]0[/code].
+				The focus policy and reading-callback kinds come from the Project Settings [code]game_input/runtime/focus_policy[/code] and [code]game_input/runtime/reading_callback_kinds[/code], unless [method set_focus_policy] or [method set_reading_callback_kinds] was called earlier, in which case those values win.
+				Returns [code]true[/code] on success, or [code]false[/code] if [code]GameInputCreate()[/code] or the device callback registration failed (in which case the singleton stays in disabled mode and every other method returns a safe default). Calling this when already initialized is a no-op and returns [code]true[/code].
 			</description>
 		</method>
 		<method name="shutdown">
 			<return type="void" />
 			<description>
-				Releases the [code]IGameInput[/code] runtime, unregisters the device callback, stops rumble on every connected device, and clears the device cache. Safe to call when not initialized. After this returns, all other methods soft-fail again.
+				Unregisters every GameInput callback and waits for callbacks already running on worker threads to return, releases every [GameInputForceFeedbackEffect], stops rumble on every connected device, releases the devices and the [code]IGameInput[/code] runtime, and clears the device cache and event queues. [signal device_disconnected] is not emitted for devices released this way; wrappers handed out earlier report [method GameInputDevice.is_connected] as [code]false[/code]. Safe to call when not initialized. After this returns, all other methods soft-fail again.
+				If GameInput refuses to remove a callback registration even here, the registration is abandoned with a warning: for the rest of the process its calls return without doing anything, and the addon's library stays loaded so that those calls remain safe.
 			</description>
 		</method>
 		<method name="is_initialized" qualifiers="const">
@@ -32,14 +38,16 @@
 		<method name="poll">
 			<return type="void" />
 			<description>
-				Drains pending device-connection events on the main thread (firing [signal device_connected] / [signal device_disconnected]) and refreshes cached gamepad state for every connected device. This is per-frame idempotent: multiple [GameInputMapper] nodes calling [method poll] defensively in the same frame cause only one real refresh, keyed on [code]Engine.get_process_frames()[/code].
+				Drains the queued GameInput events on the main thread and refreshes the cached state of every connected device. The queued events — [signal device_connected], [signal device_disconnected], [signal device_status_changed], [signal system_buttons_changed], [signal keyboard_layout_changed] and, when reading callbacks are enabled, [signal reading_received] — are emitted in the order they happened. Each device's state is then refreshed with [code]GetCurrentReading()[/code], once for each input kind the device supports, and the state it replaces becomes the previous state used for press and release edges. Vibrations started with a duration by [method GameInputDevice.start_vibration] are stopped here once the duration has elapsed.
+				This is per-frame idempotent: multiple [GameInputMapper] nodes calling [method poll] defensively in the same frame cause only one real refresh, keyed on [code]Engine.get_process_frames()[/code].
+				Calls do not nest: [method poll] called from a handler of a signal that [method poll] is emitting does nothing, even when the handler restarted the runtime with [method shutdown] and [method initialize]. The next [method poll] delivers whatever the handler queued.
 			</description>
 		</method>
 		<method name="get_devices">
 			<return type="Array" />
 			<param index="0" name="kind_mask" type="int" default="1" />
 			<description>
-				Returns an [Array] of [GameInputDevice] wrappers whose kind mask intersects [param kind_mask]. The mask is a bitfield built from the [enum DeviceKind] constants ([constant DEVICE_GAMEPAD], [constant DEVICE_KEYBOARD], [constant DEVICE_MOUSE], or [constant DEVICE_ALL]). Returns an empty [Array] when the runtime is not initialized.
+				Returns an [Array] of [GameInputDevice] wrappers whose kind mask intersects [param kind_mask], in connection order. The mask is a bitfield of [enum DeviceKind] flags and defaults to [constant DEVICE_GAMEPAD]. [constant DEVICE_ALL] matches gamepads, keyboards and mice; [constant DEVICE_ANY] matches every kind. Returns an empty [Array] when the runtime is not initialized.
 			</description>
 		</method>
 		<method name="get_primary_device">
@@ -53,7 +61,7 @@
 			<return type="GameInputReading" />
 			<param index="0" name="device" type="GameInputDevice" />
 			<description>
-				Returns a [GameInputReading] snapshot of [param device]'s current and previous gamepad state. If [method poll] has not yet captured a state for this device this frame, an on-demand reading is fetched so press/release queries still work. Returns [code]null[/code] when [param device] is null, no longer connected, or the runtime is not initialized.
+				Returns a [GameInputReading] holding [param device]'s current and previous state for every input kind the device supports except raw device reports. Normally this is the state captured by the last [method poll]. If the device has not been polled since it connected, a reading is fetched on demand; that reading has no previous state, so inputs already held report a press and nothing reports a release. Returns [code]null[/code] when [param device] is null, no longer connected, has not produced a reading yet, or the runtime is not initialized.
 			</description>
 		</method>
 		<method name="set_vibration">
@@ -64,20 +72,96 @@
 			<param index="3" name="left_trigger" type="float" default="0.0" />
 			<param index="4" name="right_trigger" type="float" default="0.0" />
 			<description>
-				Sets the rumble motor levels on [param device]. Each value is clamped to [code][0.0, 1.0][/code]. Returns [code]true[/code] when the rumble request was sent, or [code]false[/code] when the device is null, disconnected, has no rumble motors, the runtime is not initialized, or the native [code]SetRumbleState[/code] call reports failure on SDKs that expose an HRESULT. Trigger motors are only meaningful on impulse-trigger gamepads; pass [code]0.0[/code] on devices without them.
+				Sets the rumble motor levels on [param device]: [param low_freq] drives the low-frequency (strong) motor, [param high_freq] the high-frequency (weak) motor, and the trigger values the impulse-trigger motors. Each value is clamped to [code][0.0, 1.0][/code] and motors the device does not have are ignored. Returns [code]true[/code] when the rumble request was sent, or [code]false[/code] when the device is null, disconnected, has no rumble motors, the runtime is not initialized, or the native [code]SetRumbleState[/code] call reports failure on SDKs that expose an HRESULT.
+				The levels stay until they are changed; this call cancels a duration set by [method GameInputDevice.start_vibration]. For Godot-style vibration with a duration, use [method GameInputDevice.start_vibration].
 			</description>
 		</method>
 		<method name="stop_haptics">
 			<return type="void" />
 			<param index="0" name="device" type="GameInputDevice" />
 			<description>
-				Convenience for [code]set_vibration(device, 0, 0, 0, 0)[/code]. Use it to silence rumble when leaving a damage state or transitioning UI. Soft-fails on disconnected or null devices.
+				Silences [param device]: sets every rumble motor to [code]0[/code] (like [code]set_vibration(device, 0, 0, 0, 0)[/code]) and stops every force-feedback effect created on it. Stopped effects stay valid and can be started again. Use it when leaving a damage state or opening a menu. Soft-fails on disconnected or null devices.
 			</description>
 		</method>
 		<method name="get_connected_device_count" qualifiers="const">
 			<return type="int" />
+			<param index="0" name="kind_mask" type="int" default="7" />
 			<description>
-				Returns the total number of currently connected devices in the cache, regardless of kind. Intended primarily for tests and diagnostics.
+				Returns the number of connected devices whose kind mask intersects [param kind_mask]. The default, [constant DEVICE_ALL], counts gamepads, keyboards and mice; pass [constant DEVICE_ANY] to count every device. Returns [code]0[/code] when the runtime is not initialized.
+			</description>
+		</method>
+		<method name="get_device_by_id">
+			<return type="GameInputDevice" />
+			<param index="0" name="device_id" type="int" />
+			<description>
+				Returns the connected [GameInputDevice] whose id is [param device_id], whatever its kind, or [code]null[/code] when no connected device has that id or the runtime is not initialized. Ids come from [method GameInputDevice.get_device_id] and are never recycled, so a stale id simply returns [code]null[/code].
+			</description>
+		</method>
+		<method name="get_current_timestamp">
+			<return type="int" />
+			<description>
+				Returns the current time on the GameInput clock, in microseconds ([code]IGameInput::GetCurrentTimestamp()[/code]). Subtract [method GameInputReading.get_timestamp] or a signal's [code]timestamp[/code] argument from it to measure how old an input is. Returns [code]0[/code] when the runtime is not initialized.
+			</description>
+		</method>
+		<method name="set_reading_callback_kinds">
+			<return type="bool" />
+			<param index="0" name="kind_mask" type="int" />
+			<description>
+				Selects the device kinds, as [enum DeviceKind] flags, whose every reading is delivered through [signal reading_received] and [method get_buffered_readings] instead of only the latest state per [method poll]. [code]0[/code], the default, turns reading callbacks off. Bits outside [constant DEVICE_ANY] are ignored with a warning.
+				A GameInput worker thread queues the readings in a ring of 512 entries shared by every device. If the game polls too rarely to keep up, the oldest readings are dropped and counted by [method get_dropped_reading_count], and the next reading of each device that lost readings reports [method GameInputReading.has_gap_before].
+				Changing the mask, including turning callbacks off, discards readings that are queued but not yet delivered. This also applies inside a [signal reading_received] handler: the remaining readings of that [method poll] are not emitted, although device events still are. [method get_buffered_readings] is empty until the next poll, and the next reading of every device reports [method GameInputReading.has_gap_before]. Setting the current mask again changes nothing.
+				Called before [method initialize], the mask is stored, applied when the runtime starts, and takes precedence over the Project Setting [code]game_input/runtime/reading_callback_kinds[/code]. Returns [code]false[/code] only when [code]RegisterReadingCallback()[/code] failed, in which case [signal reading_received] will not fire.
+			</description>
+		</method>
+		<method name="get_reading_callback_kinds" qualifiers="const">
+			<return type="int" />
+			<description>
+				Returns the [enum DeviceKind] mask set by [method set_reading_callback_kinds] or loaded from [code]game_input/runtime/reading_callback_kinds[/code]. [code]0[/code] means reading callbacks are off.
+			</description>
+		</method>
+		<method name="get_buffered_readings">
+			<return type="Array" />
+			<param index="0" name="device" type="GameInputDevice" />
+			<description>
+				Returns the [GameInputReading] objects the reading callback delivered for [param device] during the last [method poll], oldest first and in the same order as [signal reading_received]. Use it to handle every sample of fast input, such as two taps inside one frame, without connecting to the signal. The array is replaced on every poll. It is empty when reading callbacks are off for the device's kinds, and after [method set_reading_callback_kinds] changed the mask since the last poll. Returns an empty [Array] when [param device] is null or disconnected, or the runtime is not initialized.
+			</description>
+		</method>
+		<method name="get_dropped_reading_count" qualifiers="const">
+			<return type="int" />
+			<description>
+				Returns how many readings were dropped since [method initialize] because the reading ring was full. A value that keeps growing means the game polls too rarely for the kinds enabled with [method set_reading_callback_kinds].
+			</description>
+		</method>
+		<method name="set_focus_policy">
+			<return type="void" />
+			<param index="0" name="policy" type="int" />
+			<description>
+				Sets the GameInput focus policy, a combination of [enum FocusPolicy] flags. By default the game only receives input, and the Guide and Share buttons, while it has focus. The flags can keep input flowing in the background or stop other processes from seeing the game's input while it has focus. Unknown bits are ignored with a warning.
+				The policy applies immediately when the runtime is initialized; otherwise it is stored for [method initialize] and takes precedence over the Project Setting [code]game_input/runtime/focus_policy[/code]. GameInput applies focus policy on Windows only.
+			</description>
+		</method>
+		<method name="get_focus_policy" qualifiers="const">
+			<return type="int" />
+			<description>
+				Returns the [enum FocusPolicy] flags set by [method set_focus_policy] or loaded from [code]game_input/runtime/focus_policy[/code].
+			</description>
+		</method>
+		<method name="create_aggregate_device">
+			<return type="String" />
+			<param index="0" name="kind" type="int" />
+			<description>
+				Asks GameInput for an aggregate device: a virtual device that combines the input of every connected device of one kind. [param kind] must be a single [enum DeviceKind] flag; GameInput aggregates [constant DEVICE_GAMEPAD], [constant DEVICE_KEYBOARD], [constant DEVICE_MOUSE], [constant DEVICE_ARCADE_STICK], [constant DEVICE_FLIGHT_STICK] and [constant DEVICE_RACING_WHEEL]. Calling it again for a kind whose aggregate was disabled re-enables that aggregate instead of creating another.
+				Returns the app-local id GameInput assigned to the aggregate, as the 64-character hexadecimal [String] that [method disable_aggregate_device] accepts. Returns an empty [String] when the runtime is not initialized, and an empty [String] with a warning when [param kind] is not exactly one of those six flags (a combination such as [code]DEVICE_GAMEPAD | DEVICE_KEYBOARD[/code], [constant DEVICE_ALL] and [constant DEVICE_SENSORS] are all refused) or when GameInput rejects the request.
+				GameInput reports aggregate devices through its device callback, so an aggregate arrives through [signal device_connected] like other devices, with [constant GameInputDevice.FAMILY_AGGREGATE] as its family.
+				Rumble sent to an enabled aggregate with [method GameInputDevice.start_vibration] reaches its member devices. The aggregate reports every [enum GameInputDevice.RumbleMotor] flag even when its members have fewer motors.
+			</description>
+		</method>
+		<method name="disable_aggregate_device">
+			<return type="bool" />
+			<param index="0" name="app_local_id" type="String" />
+			<description>
+				Disables an aggregate device created by [method create_aggregate_device]. [param app_local_id] must be the 64-character hexadecimal id that method returned; anything else returns [code]false[/code] with a warning. Returns [code]true[/code] on success, or [code]false[/code] when GameInput rejects the request or the runtime is not initialized.
+				Disabling does not disconnect the aggregate: it stays in [method get_devices] but stops producing aggregated readings and status changes, and rumble sent to it no longer reaches its members. Call [method create_aggregate_device] with the same kind to re-enable it; GameInput returns the same id.
 			</description>
 		</method>
 	</methods>
@@ -85,13 +169,49 @@
 		<signal name="device_connected">
 			<param index="0" name="device" type="GameInputDevice" />
 			<description>
-				Emitted on the main thread when a new device finishes being added to the cache, after the [code]IGameInput[/code] worker callback enqueued the event and [method poll] drained it. The same [GameInputDevice] wrapper instance is reused for the lifetime of that connection.
+				Emitted on the main thread when a new device finishes being added to the cache, after the [code]IGameInput[/code] worker callback enqueued the event and [method poll] drained it. Devices that were already connected when [method initialize] ran are reported on the first [method poll] after it. The same [GameInputDevice] wrapper instance is reused for the lifetime of that connection.
 			</description>
 		</signal>
 		<signal name="device_disconnected">
 			<param index="0" name="device_id" type="int" />
 			<description>
 				Emitted on the main thread when a device is removed from the cache. The wrapper that was previously handed out for this id stays alive (held by user code), but every method on it now returns a safe default. Device ids are session-local and are never recycled, so it is safe to use [param device_id] as a key in user-side dictionaries until shutdown.
+			</description>
+		</signal>
+		<signal name="device_status_changed">
+			<param index="0" name="device" type="GameInputDevice" />
+			<param index="1" name="status" type="int" />
+			<param index="2" name="previous_status" type="int" />
+			<param index="3" name="timestamp" type="int" />
+			<description>
+				Emitted when the [enum GameInputDevice.DeviceStatus] flags of a connected device change while it stays connected, for example when GameInput sets [constant GameInputDevice.STATUS_HAPTIC_INFO_READY]. [param status] and [param previous_status] are the new and old flags. [param timestamp] is on the GameInput clock, in microseconds (see [method get_current_timestamp]).
+				Connects and disconnects are reported by [signal device_connected] and [signal device_disconnected] instead. Flags that arrive together with the connect are already set in [method GameInputDevice.get_status] when [signal device_connected] is emitted, and do not emit this signal, so check both places when waiting for [constant GameInputDevice.STATUS_HAPTIC_INFO_READY].
+			</description>
+		</signal>
+		<signal name="reading_received">
+			<param index="0" name="device" type="GameInputDevice" />
+			<param index="1" name="reading" type="GameInputReading" />
+			<description>
+				Emitted for each reading GameInput delivered through the reading callback for a device whose kinds are enabled with [method set_reading_callback_kinds], in the order the readings happened. The previous state of [param reading] is the reading before it for the same device, so [method GameInputReading.was_button_pressed] and the other edge methods are exact per event even when several readings arrive in one frame.
+				Emitted from [method poll], interleaved with the other queued events in the order they happened and before the polled state is refreshed. The same readings are available afterwards from [method get_buffered_readings].
+			</description>
+		</signal>
+		<signal name="system_buttons_changed">
+			<param index="0" name="device" type="GameInputDevice" />
+			<param index="1" name="buttons" type="int" />
+			<param index="2" name="previous_buttons" type="int" />
+			<param index="3" name="timestamp" type="int" />
+			<description>
+				Emitted when the Guide or Share button of [param device] is pressed or released. [param buttons] and [param previous_buttons] are [enum GameInputDevice.SystemButton] flags. Whether the game receives these buttons depends on the platform and on [method set_focus_policy]. [param timestamp] is on the GameInput clock, in microseconds (see [method get_current_timestamp]).
+			</description>
+		</signal>
+		<signal name="keyboard_layout_changed">
+			<param index="0" name="device" type="GameInputDevice" />
+			<param index="1" name="layout" type="int" />
+			<param index="2" name="previous_layout" type="int" />
+			<param index="3" name="timestamp" type="int" />
+			<description>
+				Emitted when the keyboard layout of keyboard [param device] changes. [param layout] and [param previous_layout] are the platform layout identifiers also returned by [method GameInputDevice.get_keyboard_layout]. [param timestamp] is on the GameInput clock, in microseconds (see [method get_current_timestamp]).
 			</description>
 		</signal>
 	</signals>
@@ -109,7 +229,46 @@
 			Bit flag for mouse devices.
 		</constant>
 		<constant name="DEVICE_ALL" value="7" enum="DeviceKind">
-			Bit mask matching every recognized device kind. Pass this to [method get_devices] to enumerate every connected device.
+			Bit mask of [constant DEVICE_GAMEPAD], [constant DEVICE_KEYBOARD] and [constant DEVICE_MOUSE]. It keeps its original value so existing code behaves the same, and does not include the kinds added later. Use [constant DEVICE_ANY] to match every device.
+		</constant>
+		<constant name="DEVICE_ARCADE_STICK" value="8" enum="DeviceKind">
+			Bit flag for arcade sticks. Read them with [method GameInputReading.get_arcade_stick_buttons] or the [code]SRC_ARCADE_*[/code] [enum GameInputDevice.Source] values.
+		</constant>
+		<constant name="DEVICE_FLIGHT_STICK" value="16" enum="DeviceKind">
+			Bit flag for flight sticks: roll, pitch, yaw and throttle axes, a hat switch and buttons. See [method GameInputReading.get_flight_stick_buttons].
+		</constant>
+		<constant name="DEVICE_RACING_WHEEL" value="32" enum="DeviceKind">
+			Bit flag for racing wheels: wheel, pedals, handbrake, gear and buttons. See [method GameInputReading.get_racing_wheel_buttons].
+		</constant>
+		<constant name="DEVICE_SENSORS" value="64" enum="DeviceKind">
+			Bit flag for devices with motion sensors: accelerometer, gyrometer, compass or orientation. See [method GameInputReading.get_sensor_kinds].
+		</constant>
+		<constant name="DEVICE_CONTROLLER" value="128" enum="DeviceKind">
+			Bit flag for generic controllers read through their raw axes, buttons and switches ([method GameInputReading.get_controller_axes] and related methods). Gamepads, sticks and wheels usually report this kind as well as their own.
+		</constant>
+		<constant name="DEVICE_ANY" value="255" enum="DeviceKind">
+			Bit mask matching every device kind. Pass it to [method get_devices] or [method get_connected_device_count] to include every connected device.
+		</constant>
+		<constant name="FOCUS_POLICY_DEFAULT" value="0" enum="FocusPolicy">
+			The default policy: input, including the Guide and Share buttons, only reaches the game while it has focus.
+		</constant>
+		<constant name="FOCUS_POLICY_EXCLUSIVE_FOREGROUND_INPUT" value="2" enum="FocusPolicy">
+			While the game has focus, other processes using GameInput do not see the input it receives. Does not cover the Guide and Share buttons.
+		</constant>
+		<constant name="FOCUS_POLICY_EXCLUSIVE_FOREGROUND_GUIDE_BUTTON" value="8" enum="FocusPolicy">
+			While the game has focus, other processes using GameInput do not see Guide button presses. Consider whether players expect overlays to keep using the Guide button.
+		</constant>
+		<constant name="FOCUS_POLICY_EXCLUSIVE_FOREGROUND_SHARE_BUTTON" value="32" enum="FocusPolicy">
+			While the game has focus, other processes using GameInput do not see Share button presses, which can keep overlays from taking screenshots.
+		</constant>
+		<constant name="FOCUS_POLICY_ENABLE_BACKGROUND_INPUT" value="64" enum="FocusPolicy">
+			Input keeps reaching the game when it does not have focus. Does not cover the Guide and Share buttons, which have their own flags.
+		</constant>
+		<constant name="FOCUS_POLICY_ENABLE_BACKGROUND_GUIDE_BUTTON" value="128" enum="FocusPolicy">
+			Guide button events keep reaching the game when it does not have focus, unless the focused process claimed them exclusively.
+		</constant>
+		<constant name="FOCUS_POLICY_ENABLE_BACKGROUND_SHARE_BUTTON" value="256" enum="FocusPolicy">
+			Share button events keep reaching the game when it does not have focus, unless the focused process claimed them exclusively.
 		</constant>
 	</constants>
 </class>

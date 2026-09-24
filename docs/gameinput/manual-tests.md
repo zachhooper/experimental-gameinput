@@ -1,14 +1,22 @@
 # GameInput Manual Hardware Test Checklist
 
-The headless test suite under `tests/godot/gameinput/tests/` covers everything that
-can be verified without a real controller. This document covers the pieces
-that need a human + hardware in the loop.
+The headless test suite under `tests/godot/gameinput/tests/` and the sample
+self-test cover everything that can be verified without a person at a real
+controller. This document covers the pieces that need a human + hardware in
+the loop.
 
-> Recommended manual-test host: `sample/tutorial_gameinput/`. It ships as the
-> standalone GameInput sample and covers initialize / shutdown, device listing,
-> primary-device inspection, rumble pulse / stop, live device count, and
-> hot-plug event logging. If you prefer a minimal custom host, wire one up
-> with [Tutorial — GameInput action bridge](../tutorials/gameinput-action-bridge.md).
+> Recommended manual-test host: `sample/tutorial_gameinput/`. It is the
+> standalone GameInput sample: the left half is the tutorial (hot-plug log,
+> gamepad count, action strengths, a jumping player that rumbles the pad) and
+> the right half is the **Device inspector**, which lists every GameInput
+> device, shows the selected device's capabilities and live reading, and has
+> buttons for rumble, impulse triggers and force feedback. If you prefer a
+> minimal custom host, wire one up with
+> [Tutorial — GameInput action bridge](../tutorials/gameinput-action-bridge.md).
+
+Run the checks in a **local, unlocked** Windows session. GameInput delivers
+no input to a locked session or a Remote Desktop session — the self-test
+reports those runs as skipped — though rumble output still works there.
 
 ## Setup
 
@@ -19,67 +27,196 @@ that need a human + hardware in the loop.
     cmake --build build --preset debug
     ```
 
-2. Open `sample/tutorial_gameinput/` or another GameInput-using Godot project.
-   For a minimal custom host, wire one up by following
-   [Tutorial — GameInput action bridge](../tutorials/gameinput-action-bridge.md).
+2. Run the automated checks first; they should pass before you start:
+
+    ```powershell
+    pwsh -NoProfile -File .\tools\run_gameinput_selftest.ps1
+    ```
+
+   With the controllers you are about to test plugged in, the `runtime.*`
+   checks exercise them: `runtime.vibration`, `runtime.force_feedback` and
+   `runtime.haptics` pass instead of skipping when a connected device has
+   rumble motors, force-feedback motors or haptics, and
+   `runtime.aggregate_device` passes instead of skipping once a gamepad is
+   connected.
+
+3. Open `sample/tutorial_gameinput/` in the Godot editor and run it (F5).
 
 ## Per-feature checklist
 
 ### Initialize / shutdown lifecycle
 
-- [ ] **Initialize GameInput** scenario reports
-  `GameInput.initialize() succeeded.`
-- [ ] State panel "GameInput" section flips to `Initialized: true`.
-- [ ] **Shutdown GameInput** scenario reports `GameInput.shutdown() called.`
-- [ ] State panel flips back to `Initialized: false`.
-- [ ] Re-initializing right after shutdown succeeds without restarting the
-  sample.
+- [ ] The status line reads `GameInput runtime initialized.`
+- [ ] Closing the window exits cleanly: no crash dialog, and no `ERROR:`
+  lines mentioning `gameinput` in the output.
+- [ ] Close the window while a pad is connected and the inspector's
+  **Event-driven readings** toggle is on: the process still exits cleanly.
 
 ### Device discovery (one controller)
 
 Plug in any GameInput-compatible gamepad (XBOX Series, XBOX One, Elite,
-Razer Wolverine, etc.) **before** initializing.
+Razer Wolverine, etc.) **before** starting the sample.
 
-- [ ] After **Initialize GameInput**, state panel reports `Devices: 1`.
-- [ ] **List Devices** logs `1 device(s) — <Name> (#1)` with a sensible name.
-- [ ] **Inspect Primary Device** logs vendor / product / vibration.
+- [ ] The hot-plug log starts with `Seeded with 1 gamepad(s) at startup`
+  and the count reads `Connected gamepads: 1`.
+- [ ] The inspector lists the pad with a sensible name. Keyboards and mice
+  are listed too; they do not change the gamepad count.
+- [ ] Selecting the pad shows its family, `VID:PID`, status, input kinds,
+  rumble motors and system buttons, and `A button label: xbox_a` for an
+  Xbox pad.
 
 ### Hot-plug (connect mid-frame)
 
-Start with no controller plugged in, run **Initialize GameInput**, then plug
-in a controller.
+Start with no controller plugged in, then plug one in.
 
-- [ ] State panel flips to `Devices: 1` and shows the new primary.
-- [ ] Event log shows `GameInput device connected: <Name> (#1)`.
-- [ ] `Last Event:` line in the state panel updates to
-  `Connected — <Name> (#1)`.
+- [ ] The hot-plug log shows `connected: id=<id> (<Name>)` and the count
+  goes to `Connected gamepads: 1`.
+- [ ] The inspector's device events log shows `connected: <Name> (id <id>)`
+  and the list updates.
 
 ### Hot-plug (disconnect mid-frame)
 
 With a controller connected, unplug it.
 
-- [ ] State panel device count drops by 1.
-- [ ] Event log shows `GameInput device disconnected: #<id>`.
+- [ ] The count drops by 1 and the hot-plug log shows
+  `disconnected: id=<id>`.
 - [ ] Re-plugging assigns a **new** device id (ids are session-local
   monotonic; never recycled).
 
-### Vibration — primary device
+### Gamepad reading and the action bridge
 
-With a vibration-capable controller connected:
+- [ ] The inspector's live reading follows the sticks and triggers: stick
+  **down** reads positive Y, like Godot's joypad axes; triggers read 0 to 1.
+- [ ] Held buttons appear in `buttons:`; on an Elite pad the paddles appear
+  as `PADDLE_*`.
+- [ ] A jumps and the left stick moves the player; the action strengths
+  follow the stick.
+- [ ] Each jump gives a short, light rumble (weak 0.2, strong 0.4 for
+  0.12 s).
 
-- [ ] **Rumble Pulse** scenario causes the controller to vibrate for ~0.4 s.
-- [ ] **Stop Rumble** ends any in-flight rumble immediately.
-- [ ] Event log records both events.
-- [ ] Disconnect or disable the target device and confirm `GameInput.set_vibration()` returns `false` (or logs the native HRESULT on SDKs that report one) instead of reporting success.
+### Vibration
 
-### Vibration — two controllers
+With a vibration-capable controller selected in the inspector:
 
-Connect two vibration-capable controllers.
+- [ ] **Rumble 0.5 s** vibrates both motors for about half a second and stops
+  on its own.
+- [ ] **Stop** ends a rumble immediately.
+- [ ] **Triggers 0.5 s** pulses the impulse triggers on XBOX One and Series
+  pads, and does nothing on pads without trigger motors.
+- [ ] With two pads connected, the buttons rumble only the selected pad.
+- [ ] Disconnect the selected pad during a rumble: nothing is left running
+  when it is plugged back in.
 
-- [ ] **Rumble Pulse** vibrates the **primary** device only (not the
-  secondary).
-- [ ] After unplugging the primary, **Rumble Pulse** vibrates the new
-  primary.
+### Event-driven readings
+
+- [ ] Turn on **Event-driven readings**. `events/s` rises while a stick
+  moves and drops back when the pad is left alone; `dropped` stays at 0.
+- [ ] Turn it off: `events/s` falls to 0.
+
+### Background input and the focus policy
+
+- [ ] With **Background input** off, click another window: the live reading
+  stops following the pad.
+- [ ] Turn **Background input** on and click another window: the live
+  reading keeps following the pad.
+
+### Guide and Share buttons
+
+- [ ] Press Guide (and Share on a Series pad) with the sample focused. Note
+  whether `system buttons:` lines appear in the device events log; on
+  Windows the Game Bar usually takes Guide. Record the result, with and
+  without background input, in the PR.
+
+### Keyboard
+
+Select the keyboard in the inspector.
+
+- [ ] `keys:` lists held keys by position (`W` for the key left of E, on any
+  layout), including extended keys: arrows, right Ctrl, right Alt, numpad
+  Enter, Insert/Delete/Home/End.
+- [ ] Switch the keyboard layout (Win+Space). The device events log shows
+  `keyboard layout: <Name> 0x… -> 0x…`, and `keys:` still reports keys by
+  position.
+- [ ] Within a second of the switch, the info line's `keyboard layout 0x…`
+  shows the new id. To check `get_device_info()` as well, add this to the
+  end of `main.gd`'s `_ready()` and switch again. Both numbers it prints
+  are the new id:
+
+  ```gdscript
+  GameInput.keyboard_layout_changed.connect(func(device, layout, _previous, _timestamp):
+      print("layout %X, device info %X" % [layout, device.get_device_info()["keyboard"]["layout"]]))
+  ```
+
+  A layout whose id is 0x80000000 or more (IME and custom layouts can be)
+  shows eight hex digits and no minus sign in both places.
+
+### Mouse
+
+Select the mouse in the inspector.
+
+- [ ] `mouse:` shows the held buttons (including the side buttons), `delta`
+  follows movement and `wheel` follows the wheel.
+
+### Arcade stick, flight stick, racing wheel, motion sensors
+
+For each device you have:
+
+- [ ] **Arcade stick:** `arcade:` lists the held buttons and stick
+  directions.
+- [ ] **Flight stick:** `flight:` shows the held buttons and hat; roll,
+  pitch and yaw are signed and centered at 0; throttle covers its full
+  range. Record the direction each sign means.
+- [ ] **Racing wheel:** `wheel:` goes negative one way and positive the
+  other; throttle, brake, clutch and handbrake cover 0 to 1; `gear` follows
+  the shifter. Record the direction each sign means.
+- [ ] **Motion sensors:** accelerometer (m/s², about 9.8 at rest),
+  gyroscope (rad/s, about 0 at rest) and heading follow the device.
+
+### Force feedback
+
+With a force-feedback wheel or flight stick selected:
+
+- [ ] The info line shows at least one force-feedback motor.
+- [ ] **Force feedback pulse** gives a 0.3-strength constant force for
+  0.3 s, then stops.
+- [ ] **Stop** during the pulse ends it immediately.
+- [ ] On a wheel, a spring created with only its kind pulls the wheel back
+  to centre from both sides. With the wheel connected, add these lines to
+  `main.gd`. Keep the effect in a member: freeing it releases the effect.
+
+  ```gdscript
+  # At the top of the script:
+  var _spring: GameInputForceFeedbackEffect
+
+  # At the end of _ready():
+  await get_tree().create_timer(1.0).timeout
+  var wheel: GameInputDevice = GameInput.get_primary_device(GameInput.DEVICE_RACING_WHEEL)
+  _spring = wheel.create_force_feedback_effect(0, {"kind": GameInputForceFeedbackEffect.EFFECT_SPRING})
+  _spring.start()
+  ```
+
+  If it pushes the wheel away, record the device: the defaults follow the
+  signs in the GDK's SimpleFFBWheel sample.
+
+### Haptics
+
+With a controller that reports haptics:
+
+- [ ] Once the device reports `STATUS_HAPTIC_INFO_READY`, the info line
+  lists its haptic locations after `haptics` (for example
+  `grip_left, grip_right`) instead of `none`.
+
+### Aggregate devices
+
+With two pads connected, call
+`GameInput.create_aggregate_device(GameInput.DEVICE_GAMEPAD)` from a script
+— a temporary line in `main.gd`'s `_ready()` is enough:
+
+- [ ] A device named `GameInput Aggregate Device` with family `AGGREGATE`
+  appears in the inspector, and its live reading follows both pads.
+- [ ] Rumble sent to the aggregate reaches both pads. (The self-test's
+  `vpad.aggregate_rumble` check covers one virtual member pad; two real
+  pads have not been tried.)
 
 ### Mapper — `Input.is_action_pressed` integration
 
@@ -100,6 +237,22 @@ node into a scene and assign a small `GameInputActionMap` with one binding.
   `Input.is_action_pressed(action)` returns `false`.
 - [ ] Hold a mapped action and unplug the target controller. The action is
   released on the next frame and does not remain stuck in Godot's `InputMap`.
+- [ ] Bind `ui_accept` to an Elite paddle (`SRC_BTN_PADDLE_RIGHT_1`) and map
+  `JOY_BUTTON_PADDLE1` to `ui_accept` in the `InputMap`: one paddle press
+  presses a focused button once, not twice.
+- [ ] Bind `ui_down` to `SRC_BTN_LEFT_STICK_DOWN` and keep Godot's default
+  `ui_down` events (they include the left stick pushed down): in a column of
+  buttons, one flick of the stick moves focus one step, not two.
+- [ ] With `target_kind_mask = KIND_RACING_WHEEL`, a binding to
+  `SRC_AXIS_WHEEL` drives its action from the wheel.
+
+### Virtual gamepad in a local session
+
+The self-test's `vpad.input` check skips in locked and Remote Desktop
+sessions. In a local, unlocked session with ViGEmBus installed:
+
+- [ ] `pwsh -NoProfile -File .\tools\run_gameinput_selftest.ps1 -VirtualPad`
+  passes, with `vpad.input` reported as `pass` rather than `skip`.
 
 ## Regression smoke
 
@@ -110,6 +263,11 @@ After any change to the GameInput addon C++:
   pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tools\run_all_tests.ps1 -Hosts @('tests\godot\gameinput')
   ```
   Expected output ends with `Overall: pass`.
+- [ ] The sample self-test still passes:
+  ```powershell
+  pwsh -NoProfile -File .\tools\run_gameinput_selftest.ps1
+  pwsh -NoProfile -File .\tools\run_gameinput_selftest.ps1 -Project sample\tutorial_gameinput_csharp
+  ```
 - [ ] Any GameInput-using Godot project (your own or `sample/tutorial_gameinput/`)
   launches without `ERROR:` lines mentioning `gameinput` in editor output.
 - [ ] `GameInput` singleton appears in **Project → Project Settings →

@@ -12,6 +12,7 @@
 #include "gameinput_action_map.h"
 #include "gameinput_binding.h"
 #include "gameinput_device.h"
+#include "gameinput_force_feedback_effect.h"
 #include "gameinput_mapper.h"
 #include "gameinput_reading.h"
 
@@ -100,6 +101,7 @@ void initialize_godot_gameinput_extension(ModuleInitializationLevel p_level) {
     ClassDB::register_class<GameInput>();
     ClassDB::register_class<GameInputDevice>();
     ClassDB::register_class<GameInputReading>();
+    ClassDB::register_class<GameInputForceFeedbackEffect>();
     ClassDB::register_class<GameInputBinding>();
     ClassDB::register_class<GameInputActionMap>();
     ClassDB::register_class<GameInputMapper>();
@@ -111,11 +113,29 @@ void initialize_godot_gameinput_extension(ModuleInitializationLevel p_level) {
     _register_setting("game_input/runtime/auto_poll", true, Variant::BOOL);
     _register_setting(GAMEINPUT_SINGLETON_NAME_SETTING, String(GAMEINPUT_SINGLETON_NAME_DEFAULT),
                       Variant::STRING);
+    // Read by GameInput.initialize(); 0 keeps reading callbacks off.
+    _register_setting("game_input/runtime/reading_callback_kinds", 0, Variant::INT,
+                      PROPERTY_HINT_FLAGS,
+                      "Gamepad:1,Keyboard:2,Mouse:4,Arcade Stick:8,Flight Stick:16,"
+                      "Racing Wheel:32,Sensors:64,Controller:128");
+    _register_setting("game_input/runtime/focus_policy", 0, Variant::INT, PROPERTY_HINT_FLAGS,
+                      "Exclusive Foreground Input:2,Exclusive Foreground Guide Button:8,"
+                      "Exclusive Foreground Share Button:32,Enable Background Input:64,"
+                      "Enable Background Guide Button:128,Enable Background Share Button:256");
     _register_setting("game_input/mapper/default_action_map", String(""),
                       Variant::STRING, PROPERTY_HINT_FILE, "*.tres,*.res");
 
     _registered_singleton_name() = _resolve_singleton_name();
     Engine::get_singleton()->register_singleton(_registered_singleton_name(), GameInput::get_singleton());
+}
+
+// Main::cleanup() calls this before it deletes the main loop and finishes the
+// script languages. SCENE deinitialization, where the singleton is deleted,
+// runs after both, which is too late to release script-owned connections.
+static void on_godot_gameinput_main_loop_shutdown() {
+    if (gameinput_singleton) {
+        gameinput_singleton->_on_engine_shutdown();
+    }
 }
 
 void uninitialize_godot_gameinput_extension(ModuleInitializationLevel p_level) {
@@ -148,6 +168,9 @@ GDExtensionBool GDE_EXPORT godot_gameinput_extension_init(
 
     init_obj.register_initializer(godot::initialize_godot_gameinput_extension);
     init_obj.register_terminator(godot::uninitialize_godot_gameinput_extension);
+    // Registered with Godot during CORE initialization, which Godot runs for
+    // every extension on first load regardless of the minimum level below.
+    init_obj.register_shutdown_callback(godot::on_godot_gameinput_main_loop_shutdown);
     init_obj.set_minimum_library_initialization_level(godot::MODULE_INITIALIZATION_LEVEL_SCENE);
 
     return init_obj.init();

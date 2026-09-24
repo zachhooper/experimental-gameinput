@@ -21,7 +21,7 @@ grow_vertical = 2
 offset_left = 24.0
 offset_top = 24.0
 offset_right = -24.0
-offset_bottom = -24.0
+offset_bottom = -170.0
 
 [node name="Title" type="Label" parent="Root"]
 layout_mode = 2
@@ -30,7 +30,8 @@ theme_override_font_sizes/font_size = 24
 
 [node name="Subtitle" type="Label" parent="Root"]
 layout_mode = 2
-text = "A button → ui_accept + jump. Left stick → move_left / move_right. Keyboard fallback (A / D / Space) is additive."
+text = "A button → ui_accept + jump (the pad rumbles). Left stick → move_left / move_right. Keyboard fallback (A / D / Space) is additive."
+autowrap_mode = 3
 
 [node name="RuntimeStatus" type="Label" parent="Root"]
 layout_mode = 2
@@ -66,6 +67,19 @@ size_flags_vertical = 3
 bbcode_enabled = true
 scroll_following = true
 custom_minimum_size = Vector2(0, 120)
+
+[node name="Floor" type="ColorRect" parent="."]
+layout_mode = 1
+anchors_preset = -1
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_vertical = 0
+offset_left = 24.0
+offset_top = -24.0
+offset_right = -24.0
+offset_bottom = -22.0
+color = Color(0.35, 0.35, 0.4, 1)
 
 [node name="Player" type="ColorRect" parent="."]
 offset_left = 0.0

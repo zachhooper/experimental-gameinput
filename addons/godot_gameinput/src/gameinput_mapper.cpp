@@ -50,13 +50,16 @@ void GameInputMapper::_bind_methods() {
                          &GameInputMapper::_test_prime_native_handles_cache);
     ClassDB::bind_method(D_METHOD("_test_get_native_handles_cache_count"),
                          &GameInputMapper::_test_get_native_handles_cache_count);
+    ClassDB::bind_method(D_METHOD("_test_native_handles_binding", "binding"),
+                         &GameInputMapper::_test_native_handles_binding);
 #endif
 
     ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "action_map",
                               PROPERTY_HINT_RESOURCE_TYPE, "GameInputActionMap"),
                  "set_action_map", "get_action_map");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "target_kind_mask",
-                              PROPERTY_HINT_FLAGS, "Gamepad,Keyboard,Mouse"),
+                              PROPERTY_HINT_FLAGS,
+                              "Gamepad,Keyboard,Mouse,Arcade Stick,Flight Stick,Racing Wheel"),
                  "set_target_kind_mask", "get_target_kind_mask");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "target_device_id"),
                  "set_target_device_id", "get_target_device_id");
@@ -64,6 +67,9 @@ void GameInputMapper::_bind_methods() {
     BIND_ENUM_CONSTANT(KIND_GAMEPAD);
     BIND_ENUM_CONSTANT(KIND_KEYBOARD);
     BIND_ENUM_CONSTANT(KIND_MOUSE);
+    BIND_ENUM_CONSTANT(KIND_ARCADE_STICK);
+    BIND_ENUM_CONSTANT(KIND_FLIGHT_STICK);
+    BIND_ENUM_CONSTANT(KIND_RACING_WHEEL);
 }
 
 void GameInputMapper::_notification(int p_what) {
@@ -145,6 +151,13 @@ void GameInputMapper::_test_prime_native_handles_cache(int binding_index, bool n
 
 int GameInputMapper::_test_get_native_handles_cache_count() const {
     return (int)m_native_handles_cache.size();
+}
+
+bool GameInputMapper::_test_native_handles_binding(const Ref<GameInputBinding> &binding) const {
+    if (binding.is_null()) {
+        return false;
+    }
+    return _native_path_handles_binding(binding, binding->get_action());
 }
 #endif
 
@@ -239,44 +252,18 @@ bool GameInputMapper::_is_pressed_for(int source, float &out_strength,
         return false;
     }
 
-    // Buttons: SRC_BTN_* are 0–13 in Source enum.
-    if (source >= GD::SRC_BTN_MENU && source <= GD::SRC_BTN_RIGHT_THUMB) {
-        // Map source → Button enum → reading
-        int button = 0;
-        switch (source) {
-            case GD::SRC_BTN_MENU:           button = GD::BUTTON_MENU; break;
-            case GD::SRC_BTN_VIEW:           button = GD::BUTTON_VIEW; break;
-            case GD::SRC_BTN_A:              button = GD::BUTTON_A; break;
-            case GD::SRC_BTN_B:              button = GD::BUTTON_B; break;
-            case GD::SRC_BTN_X:              button = GD::BUTTON_X; break;
-            case GD::SRC_BTN_Y:              button = GD::BUTTON_Y; break;
-            case GD::SRC_BTN_DPAD_UP:        button = GD::BUTTON_DPAD_UP; break;
-            case GD::SRC_BTN_DPAD_DOWN:      button = GD::BUTTON_DPAD_DOWN; break;
-            case GD::SRC_BTN_DPAD_LEFT:      button = GD::BUTTON_DPAD_LEFT; break;
-            case GD::SRC_BTN_DPAD_RIGHT:     button = GD::BUTTON_DPAD_RIGHT; break;
-            case GD::SRC_BTN_LEFT_SHOULDER:  button = GD::BUTTON_LEFT_SHOULDER; break;
-            case GD::SRC_BTN_RIGHT_SHOULDER: button = GD::BUTTON_RIGHT_SHOULDER; break;
-            case GD::SRC_BTN_LEFT_THUMB:     button = GD::BUTTON_LEFT_THUMB; break;
-            case GD::SRC_BTN_RIGHT_THUMB:    button = GD::BUTTON_RIGHT_THUMB; break;
-        }
-        bool down = reading->is_button_down(button);
-        out_strength = down ? 1.0f : 0.0f;
-        return down;
+    // Axes need binding-level interpretation (deadzone, invert, threshold);
+    // the caller handles them, so an axis source never reports "pressed" here.
+    if (source >= GD::SRC_AXIS_LEFT_X && source <= GD::SRC_AXIS_FLIGHT_THROTTLE) {
+        out_strength = reading->get_source_value(source);
+        return false;
     }
 
-    // Axes
-    int axis = -1;
-    switch (source) {
-        case GD::SRC_AXIS_LEFT_X:        axis = GD::AXIS_LEFT_X; break;
-        case GD::SRC_AXIS_LEFT_Y:        axis = GD::AXIS_LEFT_Y; break;
-        case GD::SRC_AXIS_RIGHT_X:       axis = GD::AXIS_RIGHT_X; break;
-        case GD::SRC_AXIS_RIGHT_Y:       axis = GD::AXIS_RIGHT_Y; break;
-        case GD::SRC_AXIS_LEFT_TRIGGER:  axis = GD::AXIS_LEFT_TRIGGER; break;
-        case GD::SRC_AXIS_RIGHT_TRIGGER: axis = GD::AXIS_RIGHT_TRIGGER; break;
-        default: out_strength = 0.0f; return false;
-    }
-    out_strength = reading->get_axis(axis);
-    return false; // axes need binding-level interpretation; caller handles it
+    // Gamepad, arcade stick, flight stick and racing wheel buttons. Unknown
+    // sources and sources for kinds the device did not report read as up.
+    bool down = reading->is_source_down(source);
+    out_strength = down ? 1.0f : 0.0f;
+    return down;
 }
 
 void GameInputMapper::_process_bindings() {
@@ -302,15 +289,10 @@ void GameInputMapper::_process_bindings() {
 
     Ref<GameInputDevice> device;
     if (m_target_device_id >= 0) {
-        // Find device by id from the singleton's full list.
-        Array all = gi->get_devices(GameInput::DEVICE_ALL);
-        for (int i = 0; i < all.size(); ++i) {
-            Ref<GameInputDevice> d = all[i];
-            if (d.is_valid() && d->get_device_id() == m_target_device_id) {
-                device = d;
-                break;
-            }
-        }
+        // Look the id up directly: DEVICE_ALL keeps its v1 meaning (gamepad,
+        // keyboard, mouse), so a racing-wheel-only or arcade-stick-only
+        // device would never be found by filtering get_devices(DEVICE_ALL).
+        device = gi->get_device_by_id(m_target_device_id);
     } else {
         device = gi->get_primary_device(m_target_kind_mask);
     }
@@ -473,6 +455,12 @@ int GameInputMapper::_source_to_joy_button(int source) {
         case GD::SRC_BTN_DPAD_DOWN:      return 12; // JOY_BUTTON_DPAD_DOWN
         case GD::SRC_BTN_DPAD_LEFT:      return 13; // JOY_BUTTON_DPAD_LEFT
         case GD::SRC_BTN_DPAD_RIGHT:     return 14; // JOY_BUTTON_DPAD_RIGHT
+        // Godot follows SDL's paddle order: right upper, left upper, right
+        // lower, left lower (Xbox Elite P1, P3, P2, P4).
+        case GD::SRC_BTN_PADDLE_RIGHT_1: return 16; // JOY_BUTTON_PADDLE1
+        case GD::SRC_BTN_PADDLE_LEFT_1:  return 17; // JOY_BUTTON_PADDLE2
+        case GD::SRC_BTN_PADDLE_RIGHT_2: return 18; // JOY_BUTTON_PADDLE3
+        case GD::SRC_BTN_PADDLE_LEFT_2:  return 19; // JOY_BUTTON_PADDLE4
         default: return -1;
     }
 }
@@ -491,6 +479,48 @@ int GameInputMapper::_source_to_joy_axis(int source) {
         default: return -1;
     }
 }
+
+bool GameInputMapper::_source_to_joy_axis_direction(int source, int &r_axis, float &r_sign) {
+    using GD = GameInputDevice;
+    // GameInput reports the trigger buttons and thumbstick directions as
+    // buttons; Godot reports the same controls as one direction of a JoyAxis.
+    // Stick Y is down-positive in Godot, so "up" is the negative direction.
+    switch (source) {
+        case GD::SRC_BTN_LEFT_TRIGGER:      r_axis = 4; r_sign = 1.0f;  return true; // JOY_AXIS_TRIGGER_LEFT
+        case GD::SRC_BTN_RIGHT_TRIGGER:     r_axis = 5; r_sign = 1.0f;  return true; // JOY_AXIS_TRIGGER_RIGHT
+        case GD::SRC_BTN_LEFT_STICK_UP:     r_axis = 1; r_sign = -1.0f; return true; // JOY_AXIS_LEFT_Y
+        case GD::SRC_BTN_LEFT_STICK_DOWN:   r_axis = 1; r_sign = 1.0f;  return true;
+        case GD::SRC_BTN_LEFT_STICK_LEFT:   r_axis = 0; r_sign = -1.0f; return true; // JOY_AXIS_LEFT_X
+        case GD::SRC_BTN_LEFT_STICK_RIGHT:  r_axis = 0; r_sign = 1.0f;  return true;
+        case GD::SRC_BTN_RIGHT_STICK_UP:    r_axis = 3; r_sign = -1.0f; return true; // JOY_AXIS_RIGHT_Y
+        case GD::SRC_BTN_RIGHT_STICK_DOWN:  r_axis = 3; r_sign = 1.0f;  return true;
+        case GD::SRC_BTN_RIGHT_STICK_LEFT:  r_axis = 2; r_sign = -1.0f; return true; // JOY_AXIS_RIGHT_X
+        case GD::SRC_BTN_RIGHT_STICK_RIGHT: r_axis = 2; r_sign = 1.0f;  return true;
+        default: return false;
+    }
+}
+
+namespace {
+
+// True when `events` holds an InputEventJoypadMotion on `axis` in the
+// `pressed_sign` direction. An axis_value of 0 is a wildcard so
+// unconfigured-direction events still suppress the mapper's emit.
+bool has_joy_motion(const TypedArray<Ref<InputEvent>> &events, int axis, float pressed_sign) {
+    for (int i = 0; i < events.size(); ++i) {
+        Ref<InputEvent> ev = events[i];
+        if (ev.is_null()) continue;
+        Ref<InputEventJoypadMotion> motion = ev;
+        if (motion.is_null()) continue;
+        if ((int)motion->get_axis() != axis) continue;
+        float ev_val = motion->get_axis_value();
+        if (ev_val == 0.0f || ev_val * pressed_sign > 0.0f) {
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace
 
 bool GameInputMapper::_native_path_handles_binding(
         const Ref<GameInputBinding> &binding,
@@ -519,20 +549,13 @@ bool GameInputMapper::_native_path_handles_binding(
         // event's axis_value sign equals -1 when axis_invert is true and +1
         // otherwise.
         float pressed_sign = binding->get_axis_invert() ? -1.0f : 1.0f;
-        for (int i = 0; i < events.size(); ++i) {
-            Ref<InputEvent> ev = events[i];
-            if (ev.is_null()) continue;
-            Ref<InputEventJoypadMotion> motion = ev;
-            if (motion.is_null()) continue;
-            if ((int)motion->get_axis() != target_axis) continue;
-            // axis_value > 0 → positive direction matches; treat 0 as a
-            // wildcard so unconfigured-direction events still suppress emit.
-            float ev_val = motion->get_axis_value();
-            if (ev_val == 0.0f || ev_val * pressed_sign > 0.0f) {
-                return true;
-            }
-        }
-        return false;
+        return has_joy_motion(events, target_axis, pressed_sign);
+    }
+
+    int direction_axis = -1;
+    float direction_sign = 1.0f;
+    if (_source_to_joy_axis_direction(binding->get_source(), direction_axis, direction_sign)) {
+        return has_joy_motion(events, direction_axis, direction_sign);
     }
 
     int target_button = _source_to_joy_button(binding->get_source());

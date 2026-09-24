@@ -1,11 +1,13 @@
 <?xml version="1.0" encoding="UTF-8" ?>
 <class name="GameInputReading" inherits="RefCounted" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://raw.githubusercontent.com/godotengine/godot/master/doc/class.xsd">
 	<brief_description>
-		Per-frame snapshot of a gamepad's state.
+		Snapshot of one device's input, with the previous state for press and release edges.
 	</brief_description>
 	<description>
-		[GameInputReading] is an immutable snapshot of a single device's gamepad state, captured at the moment [method GameInput.get_current_reading] was called. It holds both the current and previous-poll states so [method was_button_pressed] and [method was_button_released] can return correct edge transitions across the most recent real refresh (driven by [method GameInput.poll]).
-		Edge methods only fire when there is a previous-frame state to compare against; on the very first reading after a device connects, [method was_button_pressed] reports [code]true[/code] for buttons that are currently down (treated as a fresh press) and [method was_button_released] reports [code]false[/code].
+		[GameInputReading] is an immutable snapshot of a single device's input, captured by [method GameInput.poll] (or on demand by [method GameInput.get_current_reading]) or delivered by [signal GameInput.reading_received]. It covers every input kind the device supports — gamepad, keyboard, mouse, motion sensors, arcade stick, flight stick, racing wheel and the raw controller axes, buttons and switches — except raw device reports, and [method get_input_kinds] tells which ones it contains. Methods for a kind the reading does not contain return [code]false[/code], [code]0[/code] or an empty value.
+		Each reading also holds the state it replaced, so the [code]was_*_pressed[/code] and [code]was_*_released[/code] methods report edges. For polled readings the previous state is the previous poll; for [signal GameInput.reading_received] it is the previous reading of that device. When there is no previous state yet ([method has_previous] returns [code]false[/code]), for example on the first reading after a device connects, press methods report [code]true[/code] for inputs that are already down and release methods report [code]false[/code].
+		Button methods take bit masks. A mask with several bits is a chord: [method is_button_down] returns [code]true[/code] only when every bit is held, and the edge methods report the moment the whole chord becomes held or stops being held. Masks with bits that do not exist for that kind always return [code]false[/code].
+		[enum GameInputDevice.Source] values give one vocabulary for gamepad, arcade stick, flight stick and racing wheel inputs: [method is_source_down], [method was_source_pressed], [method was_source_released] and [method get_source_value] accept any of them, which is what [GameInputMapper] uses.
 	</description>
 	<tutorials></tutorials>
 	<methods>
@@ -13,40 +15,326 @@
 			<return type="bool" />
 			<param index="0" name="button" type="int" />
 			<description>
-				Returns [code]true[/code] if [param button] (a [enum GameInputDevice.Button] flag value or any [int] matching the underlying buttons bitmask) is currently held. Use this for "while held" checks; use [method was_button_pressed] for one-shot triggers.
+				Returns [code]true[/code] if every bit of [param button], a [enum GameInputDevice.Button] flag or several flags OR-ed together, is held on the gamepad. Returns [code]false[/code] for [constant GameInputDevice.BUTTON_NONE], for masks with bits outside [enum GameInputDevice.Button], and when the reading has no gamepad state. Use this for "while held" checks; use [method was_button_pressed] for one-shot triggers.
 			</description>
 		</method>
 		<method name="was_button_pressed" qualifiers="const">
 			<return type="bool" />
 			<param index="0" name="button" type="int" />
 			<description>
-				Returns [code]true[/code] only on the press edge of [param button] — that is, the button was up in the previous reading and is down now. Returns [code]false[/code] for unknown button values. On the first reading after a device connects (no previous state yet), this falls back to "currently down".
+				Returns [code]true[/code] only on the press edge of [param button]: the button (or, for a mask, the whole chord) is held now and was not held in the previous state. Returns [code]false[/code] for unknown button values. Without a previous state (see [method has_previous]), this falls back to "currently down".
 			</description>
 		</method>
 		<method name="was_button_released" qualifiers="const">
 			<return type="bool" />
 			<param index="0" name="button" type="int" />
 			<description>
-				Returns [code]true[/code] only on the release edge of [param button] — that is, the button was down in the previous reading and is up now. Returns [code]false[/code] when there is no previous-frame state to compare against, or when [param button] is unknown.
+				Returns [code]true[/code] only on the release edge of [param button]: the button (or, for a mask, the whole chord) was held in the previous state and is not held now. Returns [code]false[/code] when there is no previous state to compare against, or when [param button] is unknown.
 			</description>
 		</method>
 		<method name="get_axis" qualifiers="const">
 			<return type="float" />
 			<param index="0" name="axis" type="int" />
 			<description>
-				Returns the value of [param axis] (a [enum GameInputDevice.Axis] index). Thumbstick axes are returned in [code][-1.0, 1.0][/code]; trigger axes are returned in [code][0.0, 1.0][/code]. The Y axes are sign-flipped from the native [code]GameInputGamepadState[/code] to match Godot's convention (down is positive). Returns [code]0.0[/code] for unknown axis ids.
+				Returns the value of [param axis], a [enum GameInputDevice.Axis] index. Thumbstick axes are in [code][-1.0, 1.0][/code] and triggers in [code][0.0, 1.0][/code]; the thumbstick Y axes are sign-flipped from the native [code]GameInputGamepadState[/code] to match Godot's convention (down is positive). Racing wheel and flight stick axes are returned as GameInput reports them (see the [enum GameInputDevice.Axis] constants for their ranges). Returns [code]0.0[/code] for unknown axis ids.
 			</description>
 		</method>
 		<method name="get_buttons_mask" qualifiers="const">
 			<return type="int" />
 			<description>
-				Returns the raw current-frame buttons bitfield. The bit layout matches the native [code]GameInputGamepadButtons[/code] flags, which is also what the [enum GameInputDevice.Button] constants encode. Useful for batch comparisons or serialization.
+				Returns the raw current gamepad buttons bitfield. The bit layout matches the native [code]GameInputGamepadButtons[/code] flags, which is also what the [enum GameInputDevice.Button] constants encode. Useful for batch comparisons or serialization.
 			</description>
 		</method>
 		<method name="get_timestamp" qualifiers="const">
 			<return type="int" />
 			<description>
-				Reserved for a future revision that surfaces [code]IGameInputReading::GetTimestamp()[/code]. The current implementation always returns [code]0[/code] because readings are snapshotted per frame rather than per native event.
+				Returns when this reading was taken, in microseconds on the GameInput clock; compare it with [method GameInput.get_current_timestamp]. For a reading that combines several input kinds this is the newest of their timestamps; [method get_kind_timestamp] returns one kind's timestamp. Returns [code]0[/code] for a reading without data.
+			</description>
+		</method>
+		<method name="get_device_id" qualifiers="const">
+			<return type="int" />
+			<description>
+				Returns the id of the device this reading came from, the same value as [method GameInputDevice.get_device_id].
+			</description>
+		</method>
+		<method name="get_kind_timestamp" qualifiers="const">
+			<return type="int" />
+			<param index="0" name="kind" type="int" />
+			<description>
+				Returns the GameInput timestamp, in microseconds, of the part of this reading that holds [param kind], a [enum GameInput.DeviceKind] flag. For a mask, the newest timestamp among those kinds is returned. Returns [code]0[/code] when the reading has none of those kinds.
+			</description>
+		</method>
+		<method name="get_input_kinds" qualifiers="const">
+			<return type="int" />
+			<description>
+				Returns the [enum GameInput.DeviceKind] flags of the input this reading contains. The raw controller axes, buttons and switches all report [constant GameInput.DEVICE_CONTROLLER].
+			</description>
+		</method>
+		<method name="has_previous" qualifiers="const">
+			<return type="bool" />
+			<description>
+				Returns [code]true[/code] when the reading holds a previous state for at least one of its kinds, so release edges can be reported. It is [code]false[/code] for the first reading after a device connects and for readings fetched on demand before the first poll.
+			</description>
+		</method>
+		<method name="has_gap_before" qualifiers="const">
+			<return type="bool" />
+			<description>
+				Returns [code]true[/code] when readings of this device were lost just before this one, because the reading ring overflowed or reading callbacks were re-registered. Edges computed against the previous state may then span the missing readings. When more than 16 devices lose readings between two polls, the next reading of every device reports a gap. Always [code]false[/code] for polled readings. See [method GameInput.get_dropped_reading_count].
+			</description>
+		</method>
+		<method name="is_truncated" qualifiers="const">
+			<return type="bool" />
+			<description>
+				Returns [code]true[/code] when the device reported more input than a reading can hold, so some of it was dropped: more than 32 simultaneous keys, or more than 32 axes, 128 buttons or 8 switches on the raw controller.
+			</description>
+		</method>
+		<method name="is_source_down" qualifiers="const">
+			<return type="bool" />
+			<param index="0" name="source" type="int" />
+			<description>
+				Returns [code]true[/code] if [param source], a [enum GameInputDevice.Source] value, is active: a button source is held, or an axis source has an absolute value of [code]0.5[/code] or more. Returns [code]false[/code] for unknown sources and for sources of an input kind the reading does not contain.
+			</description>
+		</method>
+		<method name="was_source_pressed" qualifiers="const">
+			<return type="bool" />
+			<param index="0" name="source" type="int" />
+			<description>
+				Returns [code]true[/code] on the edge where [param source] becomes active (see [method is_source_down]). Without a previous state for its kind, this falls back to "currently active".
+			</description>
+		</method>
+		<method name="was_source_released" qualifiers="const">
+			<return type="bool" />
+			<param index="0" name="source" type="int" />
+			<description>
+				Returns [code]true[/code] on the edge where [param source] stops being active (see [method is_source_down]). Returns [code]false[/code] when there is no previous state for its kind.
+			</description>
+		</method>
+		<method name="get_source_value" qualifiers="const">
+			<return type="float" />
+			<param index="0" name="source" type="int" />
+			<description>
+				Returns the value of [param source], a [enum GameInputDevice.Source] value: the axis value for axis sources (as [method get_axis] returns it), or [code]1.0[/code] when a button source is held and [code]0.0[/code] when it is not. Returns [code]0.0[/code] for unknown sources and for sources of an input kind the reading does not contain.
+			</description>
+		</method>
+		<method name="get_key_count" qualifiers="const">
+			<return type="int" />
+			<description>
+				Returns the number of keys held on the keyboard, up to 32. Returns [code]0[/code] when the reading has no keyboard state.
+			</description>
+		</method>
+		<method name="get_pressed_physical_keys" qualifiers="const">
+			<return type="PackedInt64Array" />
+			<description>
+				Returns the physical [enum @GlobalScope.Key] values of the keys held on the keyboard, without duplicates. Keys are identified by their position, like [member InputEventKey.physical_keycode], so [constant @GlobalScope.KEY_W] is the key in the W position on any layout. Scan codes without a Godot key are left out.
+			</description>
+		</method>
+		<method name="is_physical_key_down" qualifiers="const">
+			<return type="bool" />
+			<param index="0" name="physical_key" type="int" />
+			<description>
+				Returns [code]true[/code] if the key in the position of [param physical_key], a physical [enum @GlobalScope.Key] value such as [constant @GlobalScope.KEY_W], is held.
+			</description>
+		</method>
+		<method name="was_physical_key_pressed" qualifiers="const">
+			<return type="bool" />
+			<param index="0" name="physical_key" type="int" />
+			<description>
+				Returns [code]true[/code] on the edge where the key in the position of [param physical_key] becomes held. Without a previous keyboard state, this falls back to "currently held".
+			</description>
+		</method>
+		<method name="was_physical_key_released" qualifiers="const">
+			<return type="bool" />
+			<param index="0" name="physical_key" type="int" />
+			<description>
+				Returns [code]true[/code] on the edge where the key in the position of [param physical_key] stops being held. Returns [code]false[/code] when there is no previous keyboard state.
+			</description>
+		</method>
+		<method name="get_key_states" qualifiers="const">
+			<return type="Array" />
+			<description>
+				Returns one [Dictionary] per held key, up to 32, in the order GameInput reports them. Keys: [code]scan_code[/code] (extended keys use the [code]0xE0xx[/code] form), [code]virtual_key[/code] (Windows virtual-key code), [code]code_point[/code] (the Unicode character the key produces with the current layout, or [code]0[/code]), [code]is_dead_key[/code] ([bool]), [code]physical_keycode[/code] (see [method GameInputDevice.scan_code_to_physical_key]), [code]keycode[/code] (see [method GameInputDevice.virtual_key_to_keycode]) and [code]location[/code] ([enum @GlobalScope.KeyLocation], left or right for modifier keys). Returns an empty [Array] when the reading has no keyboard state.
+			</description>
+		</method>
+		<method name="get_mouse_buttons" qualifiers="const">
+			<return type="int" />
+			<description>
+				Returns the [enum GameInputDevice.MouseButton] flags held on the mouse.
+			</description>
+		</method>
+		<method name="is_mouse_button_down" qualifiers="const">
+			<return type="bool" />
+			<param index="0" name="button" type="int" />
+			<description>
+				Returns [code]true[/code] if every bit of [param button], a [enum GameInputDevice.MouseButton] flag or several OR-ed together, is held.
+			</description>
+		</method>
+		<method name="was_mouse_button_pressed" qualifiers="const">
+			<return type="bool" />
+			<param index="0" name="button" type="int" />
+			<description>
+				Returns [code]true[/code] on the edge where [param button] (or, for a mask, the whole chord) becomes held. Without a previous mouse state, this falls back to "currently held".
+			</description>
+		</method>
+		<method name="was_mouse_button_released" qualifiers="const">
+			<return type="bool" />
+			<param index="0" name="button" type="int" />
+			<description>
+				Returns [code]true[/code] on the edge where [param button] (or, for a mask, the whole chord) stops being held. Returns [code]false[/code] when there is no previous mouse state.
+			</description>
+		</method>
+		<method name="get_mouse_delta" qualifiers="const">
+			<return type="Vector2" />
+			<description>
+				Returns how far the mouse moved since the previous state, computed from the cumulative position GameInput reports. The values are mouse motion, not screen pixels. Returns [code]Vector2(0, 0)[/code] without a previous mouse state.
+			</description>
+		</method>
+		<method name="get_mouse_wheel_delta" qualifiers="const">
+			<return type="Vector2" />
+			<description>
+				Returns how far the horizontal ([code]x[/code]) and vertical ([code]y[/code]) scroll wheels moved since the previous state, computed from the cumulative wheel values GameInput reports. Returns [code]Vector2(0, 0)[/code] without a previous mouse state.
+			</description>
+		</method>
+		<method name="has_mouse_absolute_position" qualifiers="const">
+			<return type="bool" />
+			<description>
+				Returns [code]true[/code] if the device reports an absolute position ([code]GameInputMouseAbsolutePosition[/code]). Regular mice only report relative motion.
+			</description>
+		</method>
+		<method name="get_mouse_absolute_position" qualifiers="const">
+			<return type="Vector2" />
+			<description>
+				Returns the absolute position reported by the device, in its own units. Returns [code]Vector2(0, 0)[/code] when [method has_mouse_absolute_position] is [code]false[/code].
+			</description>
+		</method>
+		<method name="get_mouse_state" qualifiers="const">
+			<return type="Dictionary" />
+			<description>
+				Returns the raw mouse state as a [Dictionary]: [code]buttons[/code] ([enum GameInputDevice.MouseButton] flags), [code]positions[/code] (the GameInput position flags), [code]x[/code] and [code]y[/code] (accumulated relative motion), [code]absolute_x[/code] and [code]absolute_y[/code], and [code]wheel_x[/code] and [code]wheel_y[/code] (accumulated wheel motion). The accumulated values are 64-bit integers that wrap; use [method get_mouse_delta] and [method get_mouse_wheel_delta] for per-reading motion. Returns an empty [Dictionary] when the reading has no mouse state.
+			</description>
+		</method>
+		<method name="get_sensor_kinds" qualifiers="const">
+			<return type="int" />
+			<description>
+				Returns the [enum GameInputDevice.SensorKind] flags of the sensors the device has, when the reading contains sensor data; [code]0[/code] otherwise. Only the getters for these sensors return meaningful values.
+			</description>
+		</method>
+		<method name="get_accelerometer" qualifiers="const">
+			<return type="Vector3" />
+			<description>
+				Returns the acceleration measured by the device, in metres per second squared. GameInput reports it in g, which is multiplied by [code]9.80665[/code]. Returns [code]Vector3(0, 0, 0)[/code] when the reading has no sensor data.
+			</description>
+		</method>
+		<method name="get_gyroscope" qualifiers="const">
+			<return type="Vector3" />
+			<description>
+				Returns the angular velocity measured by the device's gyrometer, in radians per second around each axis. Returns [code]Vector3(0, 0, 0)[/code] when the reading has no sensor data.
+			</description>
+		</method>
+		<method name="get_heading_degrees" qualifiers="const">
+			<return type="float" />
+			<description>
+				Returns the compass heading in degrees. Check [method get_heading_accuracy] before trusting it. Returns [code]0.0[/code] when the reading has no sensor data.
+			</description>
+		</method>
+		<method name="get_heading_accuracy" qualifiers="const">
+			<return type="int" />
+			<description>
+				Returns the accuracy of [method get_heading_degrees] as a [enum GameInputDevice.SensorAccuracy] value.
+			</description>
+		</method>
+		<method name="get_orientation" qualifiers="const">
+			<return type="Quaternion" />
+			<description>
+				Returns the device orientation reported by GameInput as a [Quaternion]. Returns the identity [Quaternion] when the reading has no sensor data.
+			</description>
+		</method>
+		<method name="get_arcade_stick_buttons" qualifiers="const">
+			<return type="int" />
+			<description>
+				Returns the [enum GameInputDevice.ArcadeStickButton] flags held on the arcade stick, including the stick directions. Returns [code]0[/code] when the reading has no arcade stick state.
+			</description>
+		</method>
+		<method name="get_flight_stick_buttons" qualifiers="const">
+			<return type="int" />
+			<description>
+				Returns the [enum GameInputDevice.FlightStickButton] flags held on the flight stick, including the hat switch directions. Returns [code]0[/code] when the reading has no flight stick state.
+			</description>
+		</method>
+		<method name="get_flight_stick_hat" qualifiers="const">
+			<return type="int" />
+			<description>
+				Returns the flight stick's hat switch position as a [enum GameInputDevice.SwitchPosition] value; [constant GameInputDevice.SWITCH_CENTER] when it is not pressed or the reading has no flight stick state.
+			</description>
+		</method>
+		<method name="get_flight_stick_hat_vector" qualifiers="const">
+			<return type="Vector2" />
+			<description>
+				Returns the flight stick's hat switch position as a direction [Vector2], using [method GameInputDevice.switch_position_to_vector].
+			</description>
+		</method>
+		<method name="get_racing_wheel_buttons" qualifiers="const">
+			<return type="int" />
+			<description>
+				Returns the [enum GameInputDevice.RacingWheelButton] flags held on the racing wheel. Returns [code]0[/code] when the reading has no racing wheel state.
+			</description>
+		</method>
+		<method name="get_racing_wheel_gear" qualifiers="const">
+			<return type="int" />
+			<description>
+				Returns the gear selected with the racing wheel's pattern shifter, as GameInput reports it. See [code]min_pattern_shifter_gear[/code] and [code]max_pattern_shifter_gear[/code] in [method GameInputDevice.get_device_info]. Returns [code]0[/code] when the reading has no racing wheel state.
+			</description>
+		</method>
+		<method name="get_controller_axes" qualifiers="const">
+			<return type="PackedFloat32Array" />
+			<description>
+				Returns every raw controller axis, up to 32, normalized by GameInput to [code][0.0, 1.0][/code]. The order and meaning of the axes are device-specific. Returns an empty array when the reading has no raw controller axes.
+			</description>
+		</method>
+		<method name="get_controller_buttons" qualifiers="const">
+			<return type="Array" />
+			<description>
+				Returns the state of every raw controller button, up to 128, as an [Array] of [bool]. Returns an empty [Array] when the reading has no raw controller buttons.
+			</description>
+		</method>
+		<method name="get_controller_switches" qualifiers="const">
+			<return type="PackedInt32Array" />
+			<description>
+				Returns every raw controller switch, up to 8, as [enum GameInputDevice.SwitchPosition] values. Returns an empty array when the reading has no raw controller switches.
+			</description>
+		</method>
+		<method name="get_controller_axis" qualifiers="const">
+			<return type="float" />
+			<param index="0" name="index" type="int" />
+			<description>
+				Returns raw controller axis [param index]. Returns [code]0.0[/code] for an index out of range or when the reading has no raw controller axes.
+			</description>
+		</method>
+		<method name="is_controller_button_down" qualifiers="const">
+			<return type="bool" />
+			<param index="0" name="index" type="int" />
+			<description>
+				Returns [code]true[/code] if raw controller button [param index] is held. Returns [code]false[/code] for an index out of range or when the reading has no raw controller buttons.
+			</description>
+		</method>
+		<method name="was_controller_button_pressed" qualifiers="const">
+			<return type="bool" />
+			<param index="0" name="index" type="int" />
+			<description>
+				Returns [code]true[/code] on the edge where raw controller button [param index] becomes held. Without a previous state for the raw buttons, this falls back to "currently held".
+			</description>
+		</method>
+		<method name="was_controller_button_released" qualifiers="const">
+			<return type="bool" />
+			<param index="0" name="index" type="int" />
+			<description>
+				Returns [code]true[/code] on the edge where raw controller button [param index] stops being held. Returns [code]false[/code] when there is no previous state for the raw buttons.
+			</description>
+		</method>
+		<method name="get_controller_switch" qualifiers="const">
+			<return type="int" />
+			<param index="0" name="index" type="int" />
+			<description>
+				Returns raw controller switch [param index] as a [enum GameInputDevice.SwitchPosition] value. Returns [constant GameInputDevice.SWITCH_CENTER] for an index out of range or when the reading has no raw controller switches.
 			</description>
 		</method>
 	</methods>

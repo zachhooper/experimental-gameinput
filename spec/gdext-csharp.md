@@ -27,7 +27,7 @@ parallel consumer of the same runtimes.
 | --- | --- | --- | --- |
 | `godot_gdk` | `GDK` (abstract) | 46 (25 services + result + 19 value types) | Service/runtime facade |
 | `godot_playfab` | `PlayFab` (abstract) | 46 (18 services + result + 27 value/config/state types) | Service/runtime facade |
-| `godot_gameinput` | `GameInput` (concrete) | 6 (singleton + 5 device/reading/mapping types) | **Input-integration facade** (different shape) |
+| `godot_gameinput` | `GameInput` (concrete) | 7 (singleton + 6 device/reading/force-feedback/mapping types) | **Input-integration facade** (different shape) |
 | `godot_gdk_editortools` | none (GDScript editor plugin) | 0 native | **No port** — runs unchanged; optional C# CLI shim |
 
 Per the repo's top-level conventions, `godot_gdk` and `godot_playfab` are treated as
@@ -284,10 +284,12 @@ forced into the singleton-with-service-namespaces shape. It is a **synchronous p
 
 | Native | C# facade | Notes |
 | --- | --- | --- |
-| `GameInput` (singleton) | `GameInput` facade | `Initialize()`, `Shutdown()`, `IsInitialized()`, `Poll()`, `GetDevices()`, `GetPrimaryDevice()`, `GetCurrentReading()`, `SetVibration()`, `StopHaptics()`, `GetConnectedDeviceCount()` |
-| `device_connected` / `device_disconnected` signals | C# `event Action<GameInputDevice>` | hot-plug |
-| `GameInputDevice` | `GameInputDevice` | device handle/metadata |
-| `GameInputReading` | `GameInputReading` | per-poll input snapshot |
+| `GameInput` (singleton) | `GameInput` facade | `Initialize()`, `Shutdown()`, `IsInitialized()`, `Poll()`, `GetDevices()`, `GetPrimaryDevice()`, `GetCurrentReading()`, `SetVibration()`, `StopHaptics()`, `GetConnectedDeviceCount()`; v2 adds `GetDeviceById()`, `CurrentTimestamp`, `SetReadingCallbackKinds()`, `GetBufferedReadings()`, `DroppedReadingCount`, `SetFocusPolicy()`, `CreateAggregateDevice()`, `DisableAggregateDevice()` |
+| `device_connected` / `device_disconnected` signals | C# `event Action<GameInputDevice>` / `event Action<long>` | hot-plug |
+| v2 signals: `device_status_changed`, `reading_received`, `system_buttons_changed`, `keyboard_layout_changed` | typed C# events (`DeviceStatusChanged`, `ReadingReceived`, `SystemButtonsChanged`, `KeyboardLayoutChanged`) | status and system-button arguments are enums; every event (hot-plug included) connects the native signals when a handler is added or on first `GameInput.Singleton` access, so subscribers hear GDScript-driven polls |
+| `GameInputDevice` | `GameInputDevice` | device handle/metadata; v2 adds status, family, system buttons, keyboard layout, labels, haptic info, `StartVibration()` and force-feedback motors |
+| `GameInputReading` | `GameInputReading` | per-poll input snapshot; v2 adds keyboard, mouse, sensors, arcade/flight/wheel, raw controller and unified `Source` helpers |
+| `GameInputForceFeedbackEffect` (v2) | `GameInputForceFeedbackEffect` | `IDisposable`; `Dispose()` releases the native effect |
 | `GameInputBinding` | `GameInputBinding` | binding entry |
 | `GameInputActionMap` | `GameInputActionMap` | **`Resource`-derived**; loadable from `*.tres` |
 | `GameInputMapper` | `GameInputMapper` | action bridge into Godot `InputMap` |
@@ -390,7 +392,9 @@ its own:
   PlayFab). A phased `Auth` autoload (Xbox → PlayFab) and an I2 integration tech demo with
   seven tabs: achievements, leaderboard, Game Saves, lobby, MPA, Party, and GDK Game Chat.
 - **`tutorial_gameinput_csharp`** — C# mirror of `sample/tutorial_gameinput`, exercising
-  device enumeration, polling, the `InputMap` bridge, rumble, and hot-plug.
+  device enumeration, polling, the `InputMap` bridge, rumble, and hot-plug. It also runs
+  a `--gameinput-selftest` integration check (facade load, constant parity, typed events,
+  vibration, force feedback, tree-exit hygiene) through `tools/run_gameinput_selftest.ps1`.
 
 All samples require a **`_mono`** Godot editor and `dotnet/project/assembly_name`
 configured in their `project.godot`.
@@ -547,17 +551,20 @@ sign-in → Lobby/Party wiring; GameInput init → hot-plug device enumeration).
   `Button`/`Axis`/`Source`/`DeviceKind` enums, `GameInputActionMap`/`Binding`/
   `Mapper` authoring wrappers + `InputMap` bridge, `GameInputRuntime` autoload,
   and `sample/tutorial_gameinput_csharp`. In-engine smoke: device hot-plug enumerated,
-  clean shutdown.
+  clean shutdown. The GameInput v2 work (issue #97) mirrored every new native member,
+  signal and enum, added `GameInputForceFeedbackEffect`, and gave the sample a
+  14-check `--gameinput-selftest`.
 - **Phase 3 — C# samples mirror the GDScript samples 1:1: ✅ shipped.** The monolithic
   `tutorial_app_csharp` was split into `tutorial_gdk_csharp` (GDK only),
   `tutorial_playfab_csharp` (PlayFab only), and `tutorial_integrated_csharp` (GDK +
   PlayFab, seven-tab integration demo incl. GDK Game Chat), matching the GDScript
   restructure that demonstrates addon modularity. `tutorial_gameinput_csharp` mirrors the
   GameInput sample. All four sample `.csproj` projects build clean (`dotnet build`).
-- **Phase 7 — Tests: ✅ partial.** `tests/csharp/FacadeParity.Tests` (xUnit, 101
+- **Phase 7 — Tests: ✅ partial.** `tests/csharp/FacadeParity.Tests` (xUnit, 117
   tests) reflects over all three facade assemblies and asserts every native
-  `doc_classes` method/member/signal has a managed wrapper; run via
-  `tools/run_csharp_tests.ps1`. The suite caught real drift in the GDK Social
+  `doc_classes` method/member/signal has a managed wrapper, and (for
+  `godot_gameinput`) that every native constant has an enum member with the same
+  value; run via `tools/run_csharp_tests.ps1`. The suite caught real drift in the GDK Social
   wrappers and, after the #94 native expansion, the four missing GDK services
   (Game Chat 2, speech synthesis, Game Saves, XSAPI events), the new
   `XboxStats`/`XboxStore`/`XboxGameUi`/`XboxSocial`/`XboxAchievements`/`XboxSystem`

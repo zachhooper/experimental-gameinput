@@ -4,8 +4,8 @@
 		One row in a [GameInputActionMap] mapping a GameInput source onto a Godot action.
 	</brief_description>
 	<description>
-		[GameInputBinding] is an inspector-friendly [Resource] that connects a single GameInput source — either a button or an axis identified by [member source] — to a named action in Godot's [code]InputMap[/code]. [GameInputMapper] iterates over a [GameInputActionMap]'s bindings every frame and calls [code]Input.action_press()[/code] / [code]Input.action_release()[/code] based on the resolved device's reading, so the rest of the game can keep using standard [code]Input.is_action_pressed("jump")[/code] checks.
-		When [member is_axis] is [code]false[/code] the binding tracks the source's bit in the buttons mask and emits press / release on those edges with [code]strength = 1.0[/code]. When [member is_axis] is [code]true[/code], the raw axis value is read, optionally inverted via [member axis_invert], a [member deadzone] is subtracted, the remainder is rescaled into [code][0, 1][/code], and the binding is considered "pressed" when the post-invert axis is positive and its absolute value exceeds [member axis_threshold]. The press strength sent to [code]Input.action_press[/code] is the post-deadzone magnitude.
+		[GameInputBinding] is an inspector-friendly [Resource] that connects a single GameInput source — a button or an axis identified by [member source] — to a named action in Godot's [code]InputMap[/code]. [GameInputMapper] iterates over a [GameInputActionMap]'s bindings every frame and calls [code]Input.action_press()[/code] / [code]Input.action_release()[/code] based on the resolved device's reading, so the rest of the game can keep using standard [code]Input.is_action_pressed("jump")[/code] checks.
+		When [member is_axis] is [code]false[/code] the binding tracks whether the source is held and emits press / release on those edges with [code]strength = 1.0[/code]. When [member is_axis] is [code]true[/code], the axis value is read (thumbstick Y axes use Godot's down-is-positive convention), optionally inverted via [member axis_invert], a [member deadzone] is subtracted, the remainder is rescaled into [code][0, 1][/code], and the binding is considered "pressed" when the post-invert axis is positive and its absolute value exceeds [member axis_threshold]. The press strength sent to [code]Input.action_press[/code] is the post-deadzone magnitude.
 		Bindings emit [code]changed[/code] (inherited from [Resource]) whenever any of their fields are modified, so editor inspectors and dependent resources update automatically.
 	</description>
 	<tutorials></tutorials>
@@ -94,7 +94,7 @@
 			Name of the action emitted via [code]Input.action_press[/code] / [code]Input.action_release[/code]. Must already exist in the project's [code]InputMap[/code]; [GameInputMapper] warns once per missing action and then ignores the binding.
 		</member>
 		<member name="source" type="int" setter="set_source" getter="get_source" enum="GameInputDevice.Source" default="2">
-			The GameInput input this binding listens to. Accepts any [enum GameInputDevice.Source] value — buttons in [code][0, 13][/code] and axes in [code][100, 105][/code]. Defaults to [constant GameInputDevice.SRC_BTN_A].
+			The GameInput input this binding listens to. Accepts any [enum GameInputDevice.Source] value: gamepad buttons in [code][0, 29][/code], axes in [code][100, 114][/code], arcade stick buttons in [code][200, 213][/code], flight stick buttons in [code][300, 313][/code] and racing wheel buttons in [code][400, 413][/code]. Sources for an input kind the target device does not have read as released. Defaults to [constant GameInputDevice.SRC_BTN_A].
 		</member>
 		<member name="is_axis" type="bool" setter="set_is_axis" getter="get_is_axis" default="false">
 			When [code]false[/code], the binding treats [member source] as a button and emits press / release on edges of the buttons mask. When [code]true[/code], [member source] is treated as an axis and [member deadzone], [member axis_invert], and [member axis_threshold] all participate.
@@ -103,7 +103,7 @@
 			Absolute axis magnitude above which an axis-bound binding is considered "pressed". Only used when [member is_axis] is [code]true[/code]. Clamped to [code][0.0, 1.0][/code]. The press also requires the post-invert axis value to be positive, so a single bidirectional axis can be split into two opposing bindings via [member axis_invert].
 		</member>
 		<member name="axis_invert" type="bool" setter="set_axis_invert" getter="get_axis_invert" default="false">
-			When [code]true[/code], the raw axis value is negated before deadzone and threshold logic runs. Use this to bind, for example, "stick down" on a Y axis whose positive direction is up.
+			When [code]true[/code], the axis value is negated before deadzone and threshold logic runs. Use this to bind the negative direction of an axis, for example "stick left" on [constant GameInputDevice.SRC_AXIS_LEFT_X], or "stick up" on [constant GameInputDevice.SRC_AXIS_LEFT_Y], whose positive direction is down.
 		</member>
 		<member name="deadzone" type="float" setter="set_deadzone" getter="get_deadzone" default="0.2">
 			Deadzone applied to the absolute axis value before press evaluation. The remaining magnitude is rescaled into [code][0, 1][/code] and used as the press strength. Clamped to [code][0.0, 1.0][/code]. Only used when [member is_axis] is [code]true[/code].
