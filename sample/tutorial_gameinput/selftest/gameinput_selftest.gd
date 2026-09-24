@@ -306,6 +306,31 @@ func _size_headless_window() -> void:
 	_display = {"server": DisplayServer.get_name(), "viewport": [root.size.x, root.size.y]}
 
 
+## Windows names the session the process runs in: "Console" locally,
+## "RDP-Tcp#N" over Remote Desktop. Recorded so a report explains missing input.
+func _describe_session() -> Dictionary:
+	var session_name := OS.get_environment("SESSIONNAME")
+	return {
+		"name": session_name,
+		"remote": session_name.to_upper().begins_with("RDP-"),
+		"locked": _options.session_locked,
+	}
+
+
+## Conditions seen on this run that are known to stop GameInput input reaching
+## the process. Live input from the virtual pad needs an unlocked local session.
+func _input_blockers() -> String:
+	var blockers := PackedStringArray()
+	var session := _describe_session()
+	if session.locked:
+		blockers.append("the session is locked")
+	if session.remote:
+		blockers.append("this is a Remote Desktop session (%s)" % session.name)
+	if DisplayServer.get_name() == "headless":
+		blockers.append("Godot runs headless, with no focused window")
+	return "; ".join(blockers) if not blockers.is_empty() else "the process may not have input focus"
+
+
 func _arm_watchdog() -> void:
 	var timer := Timer.new()
 	timer.name = "Watchdog"
@@ -390,6 +415,7 @@ func _finish(forced_exit: int, message: String) -> void:
 			"singleton": _gi != null,
 		},
 		"display": _display,
+		"session": _describe_session(),
 		"options": _options,
 		"summary": {},
 		"checks": _results,
@@ -763,7 +789,9 @@ func _check_runtime_devices() -> bool:
 			"haptics": device.supports_haptics(),
 		}
 		summaries.append(summary)
-		labels.append("%s %s [%s]" % [summary.name, summary.vid_pid, summary.kinds])
+		# Unnamed devices already fall back to "GameInput Device VVVV:PPPP".
+		labels.append("%s [%s]" % [summary.name, summary.kinds] if String(summary.name).contains(summary.vid_pid)
+				else "%s %s [%s]" % [summary.name, summary.vid_pid, summary.kinds])
 		_expect(id > 0 and not ids.has(id), "device id %d is not a unique positive id" % id)
 		ids[id] = true
 		_expect(device.is_connected(), "device %d is listed but not connected" % id)
@@ -849,18 +877,42 @@ func _check_runtime_aggregate_device() -> bool:
 	_note("app_local_id", id)
 	if not _expect(id.length() == 64 and id.is_valid_hex_number(), "create_aggregate_device returned '%s'" % id):
 		return true
-	var surfaced := false
+	var surfaced = null
 	var deadline := Time.get_ticks_msec() + 1500
-	while Time.get_ticks_msec() < deadline and not surfaced:
+	while Time.get_ticks_msec() < deadline and surfaced == null:
 		await _frames(1)
-		for device in _gi.get_devices(_k("DEVICE_ANY")):
-			if device.get_device_family() == _d("FAMILY_AGGREGATE"):
-				surfaced = true
-	_note("surfaced", surfaced)
-	_expect(_gi.disable_aggregate_device(id), "disable_aggregate_device rejected the id it was given")
-	_pass_detail("aggregate gamepad created and disabled (%s)" %
-			("surfaced as a device" if surfaced else "no aggregate device surfaced within 1.5 s"))
+		surfaced = _find_aggregate(id)
+	_note("surfaced", surfaced != null)
+	if surfaced != null:
+		_note("surfaced_name", surfaced.get_display_name())
+		_note("surfaced_kinds", _kinds_to_string(surfaced.get_kind_mask()))
+	if not _expect(_gi.disable_aggregate_device(id), "disable_aggregate_device rejected the id it was given"):
+		return true
+	# GameInput keeps a disabled aggregate and re-enables that same device when
+	# the same kind is asked for again.
+	var again: String = _gi.create_aggregate_device(_k("DEVICE_GAMEPAD"))
+	_note("reenabled_app_local_id", again)
+	_expect(again == id, "re-enabling the aggregate returned a different id")
+	_expect(_gi.disable_aggregate_device(again), "disabling the re-enabled aggregate failed")
+	if surfaced == null:
+		_pass_detail("aggregate gamepad created, disabled and re-enabled under the same id (no aggregate device surfaced within 1.5 s)")
+		return true
+	var agg_name: String = surfaced.get_display_name()
+	_expect(not agg_name.is_empty() and not agg_name.begins_with("GameInput Device "),
+			"the aggregate is named like an unknown device ('%s')" % agg_name)
+	await _frames(2)
+	var listed := _find_aggregate(id) != null
+	_note("listed_after_disable", listed)
+	_expect(listed, "the disabled aggregate left get_devices(); GameInput documents that it stays until re-enabled")
+	_pass_detail("aggregate gamepad surfaced as '%s', stayed listed while disabled and re-enabled under the same id" % agg_name)
 	return true
+
+
+func _find_aggregate(app_local_id: String):
+	for device in _gi.get_devices(_k("DEVICE_ANY")):
+		if device.get_device_family() == _d("FAMILY_AGGREGATE") and device.get_app_local_id() == app_local_id:
+			return device
+	return null
 
 
 func _check_runtime_vibration() -> bool:
@@ -1018,8 +1070,8 @@ func _check_vpad_input() -> bool:
 	_note("timestamp_changed", timestamp_changed)
 	_note("reading_events", event_count)
 	if not timestamp_changed and not seen.values().has(true):
-		var why := "the session is locked" if _options.session_locked else "the process had no input focus or the session is locked"
-		_skip("GameInput delivered no input from the virtual pad in %.0f s (%s); rumble is still checked" % [VPAD_INPUT_WAIT_SEC, why])
+		_skip("GameInput delivered no input from the virtual pad in %.0f s (%s); rumble is still checked" % [
+				VPAD_INPUT_WAIT_SEC, _input_blockers()])
 		return true
 	for key in seen:
 		_expect(seen[key], "never observed '%s' while the vpad driver cycled A and the left stick" % key)
