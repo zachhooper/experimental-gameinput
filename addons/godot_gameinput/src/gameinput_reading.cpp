@@ -148,9 +148,10 @@ float GameInputReading::_axis_in(const gi::Snapshot &s, int axis) const {
     switch (axis) {
         case GD::AXIS_LEFT_X:          return s.gamepad.left_x;
         // Godot Y axis convention: down is positive; GameInput thumbstick Y up is positive.
-        case GD::AXIS_LEFT_Y:          return -s.gamepad.left_y;
+        // 0 - y rather than -y so a resting stick reads 0.0, not -0.0 ("-0.00" when printed).
+        case GD::AXIS_LEFT_Y:          return 0.0f - s.gamepad.left_y;
         case GD::AXIS_RIGHT_X:         return s.gamepad.right_x;
-        case GD::AXIS_RIGHT_Y:         return -s.gamepad.right_y;
+        case GD::AXIS_RIGHT_Y:         return 0.0f - s.gamepad.right_y;
         case GD::AXIS_LEFT_TRIGGER:    return s.gamepad.left_trigger;
         case GD::AXIS_RIGHT_TRIGGER:   return s.gamepad.right_trigger;
         case GD::AXIS_WHEEL:           return s.racing_wheel.wheel;

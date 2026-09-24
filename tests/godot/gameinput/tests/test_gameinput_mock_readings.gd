@@ -114,6 +114,9 @@ func test_axes_use_godot_conventions() -> void:
 	var clamped = mock_reading(_gi, pad, {"gamepad": {"left_x": 3.0, "left_trigger": -2.0}})
 	assert_eq_approx(clamped.get_axis(_d("AXIS_LEFT_X")), 1.0, "stick values clamp to 1")
 	assert_eq_approx(clamped.get_axis(_d("AXIS_LEFT_TRIGGER")), 0.0, "trigger values clamp to 0")
+	var rest = mock_reading(_gi, pad, {"gamepad": {}})
+	assert_eq("%+.2f" % rest.get_axis(_d("AXIS_LEFT_Y")), "+0.00", "a resting left stick Y reads +0.0, not -0.0")
+	assert_eq("%+.2f" % rest.get_axis(_d("AXIS_RIGHT_Y")), "+0.00", "a resting right stick Y reads +0.0, not -0.0")
 
 
 func test_axis_sources_use_half_travel_threshold() -> void:
