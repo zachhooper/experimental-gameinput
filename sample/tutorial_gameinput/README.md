@@ -55,7 +55,8 @@ pwsh -NoProfile -File .\tools\run_gameinput_selftest.ps1
 
 The runner finds Godot (`-Godot`, then `GODOT_CONSOLE` / `GODOT_BIN` /
 `GODOT`), imports the project if the addon is not registered in it yet,
-runs the self-test headless and exits with its exit code. The report and
+runs the self-test headless and exits with its exit code, once the report
+agrees with it (see [Exit codes](#exit-codes)). The report and
 Godot's output land in `build\selftest\gameinput\`. To run it without the
 runner, import the project once, then:
 
@@ -139,8 +140,8 @@ Without `--gameinput-report` the report goes to
 | --- | --- |
 | `0` | Every check passed (skips allowed unless strict). |
 | `1` | A check failed, or was skipped under strict. |
-| `2` | The harness could not run: an unknown `--gameinput-*` flag, an unwritable report, or (from the runner) no Godot, the addon not built, or a failed import. |
-| `3` | The watchdog expired before the checks finished. |
+| `2` | The harness could not run or its result cannot be trusted: an unknown `--gameinput-*` flag or an unwritable report; from the runner, also no Godot, the addon not built, a failed build, import or vpad driver, anything that threw, or Godot exiting without a report or with a code its report disagrees with (a crash on the way out). |
+| `3` | The watchdog expired before the checks finished; from the runner, also Godot still running 60 s after the watchdog, which the runner then kills. |
 
 ### Report
 

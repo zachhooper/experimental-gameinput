@@ -76,7 +76,9 @@ It takes the same flags after `--` as the GDScript self-test —
 `--gameinput-session-locked` and `--gameinput-timeout=<sec>` — writes the same
 report (schema `gameinput-selftest/1`, with `"harness": "csharp"`) and uses
 the same exit codes: `0` pass, `1` a check failed (or skipped under strict),
-`2` the harness could not run, `3` the watchdog expired. The virtual-pad
+`2` the harness could not run, `3` the watchdog expired. The runner adds its
+own `2` and `3` cases, listed in the GDScript sample's
+[exit codes](../tutorial_gameinput/README.md#exit-codes). The virtual-pad
 checks are in the GDScript self-test only.
 
 ## See also

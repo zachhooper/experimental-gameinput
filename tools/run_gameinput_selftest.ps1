@@ -31,7 +31,8 @@
          --gameinput-session-locked when this Windows session is locked
          (GameInput delivers no input to a locked session, so the live-input
          check skips and says why);
-      6. stops the driver and exits with the self-test's exit code.
+      6. stops the driver and exits with the self-test's exit code once the
+         report agrees with it (see OUTPUTS).
 
 .PARAMETER Godot
     Godot console executable. Defaults to GODOT_CONSOLE / GODOT_BIN / GODOT,
@@ -67,8 +68,13 @@
 
 .OUTPUTS
     Exit code: the self-test's own (0 pass, 1 fail, 2 harness error,
-    3 watchdog), or 2 when this script could not start the run (no Godot,
-    addon not built, C# build failed, import failed, vpad driver failed).
+    3 watchdog), taken from a report whose summary agrees with Godot's exit
+    code. Otherwise 3 when this script killed a Godot that outlived the
+    watchdog, and 2 when it could not start the run (no Godot, addon not
+    built, C# build failed, import failed, vpad driver failed, anything that
+    threw) or could not trust it (no report, a report that is not JSON, or
+    one whose exit code Godot did not return, such as a crash on the way
+    out).
 
 .EXAMPLE
     pwsh -File tools\run_gameinput_selftest.ps1
@@ -101,6 +107,15 @@ $ErrorActionPreference = 'Stop'
 
 $script:RepoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $script:ExitHarnessError = 2
+$script:ExitWatchdog = 3
+
+# Anything that throws (a -Python that does not exist, a Start-Process
+# failure) is a harness error, not a failed self-test. A finally block still
+# runs before this does, so the vpad driver is stopped.
+trap {
+    Write-Host "[run_gameinput_selftest] ERROR: $($_.Exception.Message)" -ForegroundColor Red
+    exit $script:ExitHarnessError
+}
 
 function Write-Step([string]$Message) {
     Write-Host "[run_gameinput_selftest] $Message"
@@ -333,11 +348,23 @@ try {
 Get-Content -Path $selftestLog | Where-Object { $_ -match '^\[selftest\]' } | ForEach-Object { Write-Host $_ }
 if ($null -eq $exitCode) {
     Write-Step "Godot was still running $($TimeoutSec + 60) s after starting and was killed; see $selftestLog."
-    exit $script:ExitHarnessError
+    exit $script:ExitWatchdog
 }
+# Every way the self-test ends writes the report first, so a missing one means
+# Godot never got there: a crash, a script error, or a quit from elsewhere.
 if (-not (Test-Path $reportPath)) {
     Write-Step "Godot exited $exitCode without writing a report; see $selftestLog."
-    if ($exitCode -eq 0) { exit $script:ExitHarnessError }
+    exit $script:ExitHarnessError
+}
+$reportedExit = $null
+try { $reportedExit = (Get-Content -Path $reportPath -Raw | ConvertFrom-Json).summary.exit_code } catch { }
+if ($null -eq $reportedExit) {
+    Write-Step "The report has no summary.exit_code (Godot exited $exitCode); see $reportPath and $selftestLog."
+    exit $script:ExitHarnessError
+}
+if ($reportedExit -ne $exitCode) {
+    Write-Step "The report says exit $reportedExit but Godot exited $exitCode, so it did not quit cleanly; see $selftestLog."
+    exit $script:ExitHarnessError
 }
 Write-Step "Report: $reportPath (exit $exitCode)"
 exit $exitCode
