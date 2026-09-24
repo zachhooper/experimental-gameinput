@@ -376,7 +376,7 @@ int GameInputDevice::get_system_buttons() const {
     return gi ? gi->device_get_system_buttons(m_id) : (int)SYSTEM_BUTTON_NONE;
 }
 
-int GameInputDevice::get_keyboard_layout() const {
+int64_t GameInputDevice::get_keyboard_layout() const {
     GameInput *gi = GameInput::get_singleton();
     return gi ? gi->device_get_keyboard_layout(m_id) : 0;
 }

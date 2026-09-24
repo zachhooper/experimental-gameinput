@@ -382,7 +382,7 @@ public:
     int device_get_supported_rumble_motors(int64_t id);
     int device_get_supported_system_buttons(int64_t id);
     int device_get_system_buttons(int64_t id);
-    int device_get_keyboard_layout(int64_t id);
+    int64_t device_get_keyboard_layout(int64_t id);
     String device_get_button_label(int64_t id, int source);
     Dictionary device_get_haptic_info(int64_t id);
 
@@ -425,7 +425,7 @@ public:
     bool _test_set_device_status(int64_t device_id, int status);
     bool _test_push_reading(int64_t device_id, const Dictionary &state);
     bool _test_push_system_buttons(int64_t device_id, int buttons);
-    bool _test_push_keyboard_layout(int64_t device_id, int layout);
+    bool _test_push_keyboard_layout(int64_t device_id, int64_t layout);
     Dictionary _test_get_last_rumble(int64_t device_id);
     void _test_set_time_override_usec(int64_t usec);
     int _test_get_effect_count() const;

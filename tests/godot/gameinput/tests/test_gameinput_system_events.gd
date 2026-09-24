@@ -89,6 +89,16 @@ func test_keyboard_layout_changed() -> void:
 	_gi._test_force_poll()
 	assert_eq(_log.named("keyboard_layout_changed").size(), 1, "an unchanged layout emits nothing")
 
+	# IME and custom layouts set the top bit of the 32-bit KLID.
+	var ime := 0xE0010409
+	_gi._test_push_keyboard_layout(kb.get_device_id(), ime)
+	_gi._test_force_poll()
+	events = _log.named("keyboard_layout_changed")
+	assert_eq(events.size(), 2, "the IME layout is a change")
+	assert_eq(events[1][2], ime, "the signal carries the unsigned KLID")
+	assert_eq(kb.get_keyboard_layout(), ime, "the accessor is not sign-extended")
+	assert_eq(kb.get_device_info()["keyboard"]["layout"], ime, "nor is the info layout")
+
 
 func test_events_keep_queue_order() -> void:
 	_gi = begin_mock_session()

@@ -2665,7 +2665,9 @@ Dictionary GameInput::device_get_device_info(int64_t id) {
     if (const GameInputKeyboardInfo *k = info->keyboardInfo) {
         Dictionary d;
         d["kind"] = (int)k->kind;
-        d["layout"] = (int64_t)k->layout;
+        // GetDeviceInfo() is static; the layout callback keeps the cache
+        // current after the player switches input language.
+        d["layout"] = (int64_t)e.keyboard_layout;
         d["key_count"] = (int64_t)k->keyCount;
         d["function_key_count"] = (int64_t)k->functionKeyCount;
         d["max_simultaneous_keys"] = (int64_t)k->maxSimultaneousKeys;
@@ -2881,9 +2883,11 @@ int GameInput::device_get_system_buttons(int64_t id) {
     return idx < 0 ? 0 : (int)m_devices[idx].system_buttons;
 }
 
-int GameInput::device_get_keyboard_layout(int64_t id) {
+int64_t GameInput::device_get_keyboard_layout(int64_t id) {
     int idx = _find_index_by_id(id);
-    return idx < 0 ? 0 : (int)m_devices[idx].keyboard_layout;
+    // KLIDs are unsigned 32-bit; IME layouts such as 0xE0010409 set the top
+    // bit, so they must not pass through a signed 32-bit int.
+    return idx < 0 ? 0 : (int64_t)m_devices[idx].keyboard_layout;
 }
 
 String GameInput::device_get_button_label(int64_t id, int source) {
@@ -3489,7 +3493,7 @@ bool GameInput::_test_push_system_buttons(int64_t device_id, int buttons) {
     return _queue_event(ev);
 }
 
-bool GameInput::_test_push_keyboard_layout(int64_t device_id, int layout) {
+bool GameInput::_test_push_keyboard_layout(int64_t device_id, int64_t layout) {
     if (!m_initialized || m_backend != Backend::Mock) return false;
     int idx = _find_index_by_id(device_id);
     if (idx < 0) return false;

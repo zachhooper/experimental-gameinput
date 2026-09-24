@@ -333,7 +333,7 @@ public:
     int get_supported_rumble_motors() const;
     int get_supported_system_buttons() const;
     int get_system_buttons() const;
-    int get_keyboard_layout() const;
+    int64_t get_keyboard_layout() const;
     String get_button_label(int source) const;
     Dictionary get_haptic_info() const;
 

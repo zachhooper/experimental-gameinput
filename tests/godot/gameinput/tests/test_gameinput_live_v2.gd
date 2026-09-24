@@ -97,6 +97,11 @@ func test_live_device_info_is_consistent() -> void:
 			var motor_info: Dictionary = device.get_force_feedback_motor_info(motor)
 			assert_true(motor_info.has("supported_effects"), "%s: motor %d info" % [label, motor])
 		assert_typeof(device.get_haptic_info(), TYPE_DICTIONARY, "%s: haptic info" % label)
+		if info.has("keyboard"):
+			# The layout callback keeps this current; GetDeviceInfo() is static.
+			assert_eq(info["keyboard"]["layout"], device.get_keyboard_layout(),
+					"%s: info layout matches the tracked layout" % label)
+			assert_true(device.get_keyboard_layout() >= 0, "%s: the KLID is unsigned" % label)
 		gut.p("live device: %s kinds=0x%X family=%d rumble=0x%X ffb=%d" % [label,
 				info["supported_input_kinds"], info["device_family"],
 				info["supported_rumble_motors"], info["force_feedback_motor_count"]])
