@@ -9,9 +9,10 @@ namespace GodotGameInput;
 /// Immutable snapshot of one device's input, mirroring the native
 /// <c>GameInputReading</c>. Covers every input kind the device supports
 /// (gamepad, keyboard, mouse, sensors, arcade stick, flight stick, racing wheel
-/// and raw controller) and holds the state it replaced, so edge queries return
-/// correct transitions. Methods for a kind the reading does not contain return
-/// false, 0 or an empty value; check <see cref="InputKinds"/>.
+/// and raw controller) except raw device reports, and holds the state it
+/// replaced, so edge queries return correct transitions. Methods for a kind the
+/// reading does not contain return false, 0 or an empty value; check
+/// <see cref="InputKinds"/>.
 /// </summary>
 public sealed class GameInputReading : GameInputObject
 {

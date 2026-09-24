@@ -39,7 +39,7 @@ The core architectural rule is: **C++ is internal; GDScript is the primary publi
 | --- | --- | --- |
 | Runtime init/shutdown | Shipped (v1) | `GameInputCreate`, callback registration, idempotent teardown |
 | Device discovery/lifecycle | Shipped (v1), extended in v2 | connected/disconnected device cache, hot-plug signals on the main thread; v2 adds `device_status_changed` and `get_device_by_id()` |
-| Polling API | Shipped (v1), extended in v2 | `GameInput.poll()` is per-frame idempotent; v2 reads every kind a device supports in one `GetCurrentReading` per kind group |
+| Polling API | Shipped (v1), extended in v2 | `GameInput.poll()` is per-frame idempotent; v2 reads every kind a device supports except raw device reports, one `GetCurrentReading` per kind group |
 | Gamepad readings | Shipped (v1), extended in v2 | v2 adds the C/Z buttons, trigger and stick-direction buttons, and Elite paddles |
 | Keyboard, mouse, motion sensors | Shipped (v2) | physical keys from scan codes, mouse deltas/wheel/absolute position, accelerometer/gyroscope/orientation/heading in SI units |
 | Arcade stick, flight stick, racing wheel | Shipped (v2) | typed button masks, axes and hat/gear; mapper sources for all three |

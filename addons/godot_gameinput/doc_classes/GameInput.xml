@@ -59,7 +59,7 @@
 			<return type="GameInputReading" />
 			<param index="0" name="device" type="GameInputDevice" />
 			<description>
-				Returns a [GameInputReading] holding [param device]'s current and previous state for every input kind the device supports. Normally this is the state captured by the last [method poll]. If the device has not been polled since it connected, a reading is fetched on demand; that reading has no previous state, so inputs already held report a press and nothing reports a release. Returns [code]null[/code] when [param device] is null, no longer connected, has not produced a reading yet, or the runtime is not initialized.
+				Returns a [GameInputReading] holding [param device]'s current and previous state for every input kind the device supports except raw device reports. Normally this is the state captured by the last [method poll]. If the device has not been polled since it connected, a reading is fetched on demand; that reading has no previous state, so inputs already held report a press and nothing reports a release. Returns [code]null[/code] when [param device] is null, no longer connected, has not produced a reading yet, or the runtime is not initialized.
 			</description>
 		</method>
 		<method name="set_vibration">

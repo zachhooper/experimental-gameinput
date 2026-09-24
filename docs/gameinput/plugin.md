@@ -12,8 +12,9 @@ The addon gives GDScript first-class access to:
 * Every device kind GameInput reports — gamepads, keyboards, mice, arcade
   sticks, flight sticks, racing wheels, motion sensors and raw controllers —
   with device information, status and button labels for prompts
-* Per-frame readings of every input kind, with edge-detected press / release,
-  and optional event-driven readings that keep every sample between two frames
+* Per-frame readings of every input kind except raw device reports, with
+  edge-detected press / release, and optional event-driven readings that
+  keep every sample between two frames
 * Vibration in the shape of `Input.start_joy_vibration` (weak / strong motors,
   a duration, impulse triggers), force-feedback effects, and haptic
   information
