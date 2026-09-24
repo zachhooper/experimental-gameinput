@@ -2237,13 +2237,21 @@ String GameInput::create_aggregate_device(int kind) {
     if (m_backend != Backend::Native || !m_game_input) {
         return String();
     }
-    const uint32_t native =
-            native_kinds_from_snap(gi::snapshot_kinds_from_public((uint32_t)kind & DEVICE_ANY));
-    if (!native) {
+    // GameInput aggregates exactly one of these kinds. Anything else, a
+    // combination of them included, fails natively with E_NOTIMPL.
+    constexpr uint32_t kAggregatableKinds = DEVICE_GAMEPAD | DEVICE_KEYBOARD | DEVICE_MOUSE |
+                                            DEVICE_ARCADE_STICK | DEVICE_FLIGHT_STICK |
+                                            DEVICE_RACING_WHEEL;
+    const uint32_t requested = (uint32_t)kind;
+    if (kind < 0 || requested == 0 || (requested & (requested - 1)) != 0 ||
+            (requested & kAggregatableKinds) != requested) {
         UtilityFunctions::push_warning(
-            "GameInput: create_aggregate_device() needs at least one DeviceKind bit.");
+            "GameInput: create_aggregate_device() takes exactly one of DEVICE_GAMEPAD, "
+            "DEVICE_KEYBOARD, DEVICE_MOUSE, DEVICE_ARCADE_STICK, DEVICE_FLIGHT_STICK or "
+            "DEVICE_RACING_WHEEL (got ", kind, ").");
         return String();
     }
+    const uint32_t native = native_kinds_from_snap(gi::snapshot_kinds_from_public(requested));
     APP_LOCAL_DEVICE_ID id{};
     HRESULT hr = m_game_input->CreateAggregateDevice((GameInputKind)native, &id);
     if (FAILED(hr)) {

@@ -179,3 +179,35 @@ func test_live_aggregate_device_round_trip() -> void:
 		return
 	assert_eq(id.length(), 64, "aggregate app-local id")
 	assert_true(_gi.disable_aggregate_device(id), "DisableAggregateDevice succeeds")
+
+
+func test_live_aggregate_device_takes_exactly_one_supported_kind() -> void:
+	if not _start_native():
+		return
+	# GameInput aggregates exactly six kinds, one at a time; other values fail
+	# natively with E_NOTIMPL. Stray bits outside DeviceKind are refused rather
+	# than masked away, so DEVICE_GAMEPAD | 256 is not a gamepad aggregate.
+	var created: Array[String] = []
+	for kind_name in ["DEVICE_GAMEPAD", "DEVICE_KEYBOARD", "DEVICE_MOUSE",
+			"DEVICE_ARCADE_STICK", "DEVICE_FLIGHT_STICK", "DEVICE_RACING_WHEEL"]:
+		var id: String = _gi.create_aggregate_device(_k(kind_name))
+		if id.is_empty() and kind_name == "DEVICE_GAMEPAD":
+			pending("CreateAggregateDevice is not available on this GameInput runtime")
+			return
+		assert_eq(id.length(), 64, "%s aggregates" % kind_name)
+		if not id.is_empty():
+			created.append(id)
+	var refused := {
+		"DEVICE_SENSORS": _k("DEVICE_SENSORS"),
+		"DEVICE_CONTROLLER": _k("DEVICE_CONTROLLER"),
+		"DEVICE_GAMEPAD | DEVICE_KEYBOARD": _k("DEVICE_GAMEPAD") | _k("DEVICE_KEYBOARD"),
+		"DEVICE_ALL": _k("DEVICE_ALL"),
+		"DEVICE_ANY": _k("DEVICE_ANY"),
+		"DEVICE_GAMEPAD | 256": _k("DEVICE_GAMEPAD") | 256,
+		"0": 0,
+		"-1": -1,
+	}
+	for label in refused:
+		assert_eq(_gi.create_aggregate_device(refused[label]), "", "%s is refused" % label)
+	for id in created:
+		assert_true(_gi.disable_aggregate_device(id), "disable %s" % id.substr(0, 8))

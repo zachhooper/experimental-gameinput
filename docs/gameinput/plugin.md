@@ -325,6 +325,11 @@ GameInput applies focus policy on Windows only.
 
 `create_aggregate_device(kind)` asks GameInput for a virtual device that
 combines every connected device of one kind, and returns its app-local id.
+`kind` must be exactly one of `DEVICE_GAMEPAD`, `DEVICE_KEYBOARD`,
+`DEVICE_MOUSE`, `DEVICE_ARCADE_STICK`, `DEVICE_FLIGHT_STICK` or
+`DEVICE_RACING_WHEEL`; for anything else, `DEVICE_ALL` and other
+combinations included, it warns and returns an empty string. Create one
+aggregate per kind you need.
 The aggregate arrives through `device_connected` like any device, with
 `FAMILY_AGGREGATE` as its family and the name `GameInput Aggregate Device`
 when GameInput gives it none. `disable_aggregate_device(id)` stops it

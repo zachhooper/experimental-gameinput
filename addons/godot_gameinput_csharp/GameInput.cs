@@ -246,8 +246,12 @@ public static class GameInput
 
     /// <summary>
     /// Asks GameInput for a virtual device combining every connected device of
-    /// one kind. Returns its app-local id (64 hex characters), or an empty string
-    /// on failure. The aggregate arrives through <see cref="DeviceConnected"/>.
+    /// one kind: exactly one of <see cref="DeviceKind.Gamepad"/>,
+    /// <see cref="DeviceKind.Keyboard"/>, <see cref="DeviceKind.Mouse"/>,
+    /// <see cref="DeviceKind.ArcadeStick"/>, <see cref="DeviceKind.FlightStick"/>
+    /// or <see cref="DeviceKind.RacingWheel"/>. Returns its app-local id
+    /// (64 hex characters), or an empty string for any other kind or on
+    /// failure. The aggregate arrives through <see cref="DeviceConnected"/>.
     /// </summary>
     public static string CreateAggregateDevice(DeviceKind kind) =>
         Singleton == null ? string.Empty : Singleton.Call("create_aggregate_device", (int)kind).AsString();
