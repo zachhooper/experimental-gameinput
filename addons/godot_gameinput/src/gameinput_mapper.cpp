@@ -289,15 +289,10 @@ void GameInputMapper::_process_bindings() {
 
     Ref<GameInputDevice> device;
     if (m_target_device_id >= 0) {
-        // Find device by id from the singleton's full list.
-        Array all = gi->get_devices(GameInput::DEVICE_ALL);
-        for (int i = 0; i < all.size(); ++i) {
-            Ref<GameInputDevice> d = all[i];
-            if (d.is_valid() && d->get_device_id() == m_target_device_id) {
-                device = d;
-                break;
-            }
-        }
+        // Look the id up directly: DEVICE_ALL keeps its v1 meaning (gamepad,
+        // keyboard, mouse), so a racing-wheel-only or arcade-stick-only
+        // device would never be found by filtering get_devices(DEVICE_ALL).
+        device = gi->get_device_by_id(m_target_device_id);
     } else {
         device = gi->get_primary_device(m_target_kind_mask);
     }

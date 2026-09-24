@@ -73,6 +73,108 @@ func pending_unless_runtime_available() -> bool:
 	return false
 
 
+# ── Mock backend (debug builds only) ─────────────────────────────────────
+# `GameInput._test_*` seams exist only in debug builds of the addon (they sit
+# under `#ifndef NDEBUG`, like the GameInputMapper seams) and are not part of
+# the documented API. They swap the native runtime for a scripted one that
+# feeds the same queues, so connect/disconnect, readings, rumble and force
+# feedback run deterministically on any host — including CI runners and
+# locked sessions, where GameInput delivers no input at all.
+
+const MOCK_BACKEND := 2
+
+## Starts a clean mock session and returns the singleton. Returns null after
+## marking the test pending when the host has no singleton or loaded a
+## release build (no seams). Runtime overrides from earlier tests are reset.
+func begin_mock_session():
+	var gi = get_gameinput()
+	if gi == null:
+		pending("GameInput singleton is not available in this host")
+		return null
+	if not gi.has_method("_test_initialize_mock"):
+		pending("GameInput mock seams are debug-only; this host loaded a release build")
+		return null
+	gi.shutdown()
+	gi.set_reading_callback_kinds(0)
+	gi.set_focus_policy(0)
+	gi._test_initialize_mock()
+	return gi
+
+
+## Tears a mock session down and clears the runtime overrides it may have set.
+func end_mock_session(gi) -> void:
+	if gi == null:
+		return
+	gi.shutdown()
+	gi.set_reading_callback_kinds(0)
+	gi.set_focus_policy(0)
+
+
+## Injects a mock device and drains its connect event. Returns the
+## GameInputDevice wrapper, or null when the info was rejected.
+func add_mock_device(gi, info: Dictionary = {}):
+	var id: int = gi._test_inject_device(info)
+	if id <= 0:
+		return null
+	gi._test_force_poll()
+	return gi.get_device_by_id(id)
+
+
+## Pushes one mock reading (native GameInput conventions: stick up is
+## positive, mouse positions accumulate) and runs a poll so the polled
+## reading and any reading_received signals reflect it.
+func push_mock_reading(gi, device, state: Dictionary) -> bool:
+	var ok: bool = gi._test_push_reading(device.get_device_id(), state)
+	gi._test_force_poll()
+	return ok
+
+
+## Pushes a mock reading and returns the polled GameInputReading after it.
+func mock_reading(gi, device, state: Dictionary):
+	push_mock_reading(gi, device, state)
+	return gi.get_current_reading(device)
+
+
+## Records every GameInput signal in emission order as
+## `[signal_name, arg0, arg1, ...]`. Call `stop()` when done.
+class GameInputSignalLog:
+	var events: Array = []
+	var _gi: Object
+	var _connections: Array = []
+
+	func _init(gi: Object) -> void:
+		_gi = gi
+		_watch("device_connected", func(d): events.append(["device_connected", d]))
+		_watch("device_disconnected", func(id): events.append(["device_disconnected", id]))
+		_watch("device_status_changed", func(d, s, p, t): events.append(["device_status_changed", d, s, p, t]))
+		_watch("reading_received", func(d, r): events.append(["reading_received", d, r]))
+		_watch("system_buttons_changed", func(d, b, p, t): events.append(["system_buttons_changed", d, b, p, t]))
+		_watch("keyboard_layout_changed", func(d, l, p, t): events.append(["keyboard_layout_changed", d, l, p, t]))
+
+	func _watch(signal_name: String, callable: Callable) -> void:
+		_gi.connect(signal_name, callable)
+		_connections.append([signal_name, callable])
+
+	func named(signal_name: String) -> Array:
+		return events.filter(func(e): return e[0] == signal_name)
+
+	func names() -> Array:
+		return events.map(func(e): return e[0])
+
+	func clear() -> void:
+		events.clear()
+
+	func stop() -> void:
+		for c in _connections:
+			if _gi.is_connected(c[0], c[1]):
+				_gi.disconnect(c[0], c[1])
+		_connections.clear()
+
+
+func watch_gameinput_signals(gi) -> GameInputSignalLog:
+	return GameInputSignalLog.new(gi)
+
+
 # ── Float comparison sugar ───────────────────────────────────────────────
 # C++ float properties round-trip through 32-bit storage and won't equal
 # 64-bit double literals exactly. This is the canonical `assert_eq_approx`
