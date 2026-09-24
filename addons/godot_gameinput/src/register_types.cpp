@@ -129,6 +129,15 @@ void initialize_godot_gameinput_extension(ModuleInitializationLevel p_level) {
     Engine::get_singleton()->register_singleton(_registered_singleton_name(), GameInput::get_singleton());
 }
 
+// Main::cleanup() calls this before it deletes the main loop and finishes the
+// script languages. SCENE deinitialization, where the singleton is deleted,
+// runs after both, which is too late to release script-owned connections.
+static void on_godot_gameinput_main_loop_shutdown() {
+    if (gameinput_singleton) {
+        gameinput_singleton->_on_engine_shutdown();
+    }
+}
+
 void uninitialize_godot_gameinput_extension(ModuleInitializationLevel p_level) {
     if (p_level != MODULE_INITIALIZATION_LEVEL_SCENE) {
         return;
@@ -159,6 +168,9 @@ GDExtensionBool GDE_EXPORT godot_gameinput_extension_init(
 
     init_obj.register_initializer(godot::initialize_godot_gameinput_extension);
     init_obj.register_terminator(godot::uninitialize_godot_gameinput_extension);
+    // Registered with Godot during CORE initialization, which Godot runs for
+    // every extension on first load regardless of the minimum level below.
+    init_obj.register_shutdown_callback(godot::on_godot_gameinput_main_loop_shutdown);
     init_obj.set_minimum_library_initialization_level(godot::MODULE_INITIALIZATION_LEVEL_SCENE);
 
     return init_obj.init();

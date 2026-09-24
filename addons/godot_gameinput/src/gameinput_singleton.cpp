@@ -1868,6 +1868,28 @@ void GameInput::shutdown() {
     UtilityFunctions::print("GameInput: shutdown");
 }
 
+void GameInput::_on_engine_shutdown() {
+    shutdown();
+
+    // The singleton outlives ScriptServer::finish_languages(): it is deleted
+    // at SCENE deinitialization. A GDScript lambda still connected to one of
+    // its signals at that point is destroyed after GDScript has gone and
+    // crashes the process on exit (0xC0000005). This hook runs from
+    // Main::cleanup() before the main loop and the languages are torn down,
+    // so drop every connection while their targets are still valid.
+    const TypedArray<Dictionary> signals = get_signal_list();
+    for (int i = 0; i < signals.size(); ++i) {
+        const StringName signal_name = Dictionary(signals[i]).get("name", StringName());
+        const TypedArray<Dictionary> connections = get_signal_connection_list(signal_name);
+        for (int j = 0; j < connections.size(); ++j) {
+            const Callable callable = Dictionary(connections[j]).get("callable", Callable());
+            if (is_connected(signal_name, callable)) {
+                disconnect(signal_name, callable);
+            }
+        }
+    }
+}
+
 bool GameInput::is_initialized() const {
     return m_initialized;
 }

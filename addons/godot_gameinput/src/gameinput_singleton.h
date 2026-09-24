@@ -281,6 +281,11 @@ public:
     bool is_initialized() const;
     void poll();
 
+    // Engine-exit hook called from the GDExtension main-loop shutdown callback
+    // (register_types.cpp). Shuts the runtime down and disconnects every signal
+    // connection while script languages are still alive. Not bound.
+    void _on_engine_shutdown();
+
     Array get_devices(int kind_mask = DEVICE_GAMEPAD);
     Ref<GameInputDevice> get_primary_device(int kind_mask = DEVICE_GAMEPAD);
     Ref<GameInputDevice> get_device_by_id(int64_t device_id);
