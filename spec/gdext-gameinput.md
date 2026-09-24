@@ -505,6 +505,14 @@ callback fence, signals emitted from `poll()`, soft-fail everywhere. It adds:
   `poll()` emits them in the order GameInput reported them. A drop (or a
   re-registration) sets `has_gap_before()` on the device's next event
   reading, so a game can tell that its edges span missing readings.
+  The alternative was to walk GameInput's history from the main thread
+  with `GetNextReading()`, as the GDK `GameInputSequential` sample does.
+  That needs no callback, but the history holds only half a second of
+  readings per device, and a walk filtered to one device fails once that
+  device is disconnected, so readings from just before an unplug can be
+  lost. The callback's readings are already queued by then, and `poll()`
+  delivers them before `device_disconnected`
+  (`test_readings_and_device_events_share_one_order`).
 - **Two vibration shapes.** `GameInputDevice.start_vibration(weak, strong,
   duration)` matches Godot's `Input.start_joy_vibration` (weak drives the
   high-frequency motor, strong the low-frequency motor) and `poll()` stops
