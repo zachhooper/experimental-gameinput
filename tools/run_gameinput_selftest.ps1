@@ -8,18 +8,25 @@
     integration harness: `godot --headless --path sample\tutorial_gameinput
     -- --gameinput-selftest` checks the API surface, the real GameInput
     runtime and, through the addon's debug-only mock backend, the tutorial's
-    own wiring and every v2 input kind. This script wraps that run:
+    own wiring and every v2 input kind. sample\tutorial_gameinput_csharp
+    carries the managed counterpart, which checks the C# facade and the C#
+    tutorial. This script wraps either run:
 
       1. finds Godot (-Godot, then GODOT_CONSOLE / GODOT_BIN / GODOT, then
-         sample\Godot*_console.exe, then godot / godot4 on PATH);
+         sample\Godot*_console.exe, then godot / godot4 on PATH). A C#
+         project (one with a .csproj) needs a Godot .NET build, recognised by
+         the GodotSharp folder beside the executable; GODOT_MONO is tried
+         first for it;
       2. checks the addon DLL has been copied into the project (build the
-         godot_gameinput target first);
-      3. imports the project when it has no .godot folder yet. The first
-         headless import of a project that loads a GDExtension can crash
-         while the editor tears down, so it imports twice and only the
-         second import has to succeed;
-      4. with -VirtualPad, starts tools\virtual_gamepad\vpad_driver.py and
-         waits for the pad to be plugged in;
+         godot_gameinput target first) and, for a C# project, builds it with
+         dotnet build;
+      3. imports the project when Godot has not registered the addon's
+         GDExtension in it yet. The first headless import of a project that
+         loads a GDExtension can crash while the editor tears down, so it
+         imports twice and only the second import has to succeed;
+      4. with -VirtualPad (GDScript sample only), starts
+         tools\virtual_gamepad\vpad_driver.py and waits for the pad to be
+         plugged in;
       5. runs the self-test with its report in -OutDir, adding
          --gameinput-session-locked when this Windows session is locked
          (GameInput delivers no input to a locked session, so the live-input
@@ -27,15 +34,17 @@
       6. stops the driver and exits with the self-test's exit code.
 
 .PARAMETER Godot
-    Godot console executable. Defaults to GODOT_CONSOLE / GODOT_BIN / GODOT.
+    Godot console executable. Defaults to GODOT_CONSOLE / GODOT_BIN / GODOT,
+    or for a C# project GODOT_MONO first.
 
 .PARAMETER Project
-    Project to run. Default: sample\tutorial_gameinput.
+    Project to run. Default: sample\tutorial_gameinput. Pass
+    sample\tutorial_gameinput_csharp for the C# self-test.
 
 .PARAMETER VirtualPad
     Start the vpad driver and run the vpad.* checks: enumeration, device
     info, live input and a rumble round trip checked against the motor
-    values ViGEm reports back.
+    values ViGEm reports back. The GDScript sample only.
 
 .PARAMETER Python
     Python used for the vpad driver. Default: python.
@@ -49,8 +58,8 @@
 
 .PARAMETER OutDir
     Receives gameinput-selftest.json (the report), selftest.log (Godot's
-    output) and, with -VirtualPad, vpad.jsonl and vpad-driver.log.
-    Default: build\selftest\gameinput.
+    output), dotnet-build.log for a C# project and, with -VirtualPad,
+    vpad.jsonl and vpad-driver.log. Default: build\selftest\gameinput.
 
 .PARAMETER TimeoutSec
     Self-test watchdog in seconds (--gameinput-timeout). The Godot process
@@ -59,13 +68,16 @@
 .OUTPUTS
     Exit code: the self-test's own (0 pass, 1 fail, 2 harness error,
     3 watchdog), or 2 when this script could not start the run (no Godot,
-    addon not built, import failed, vpad driver failed).
+    addon not built, C# build failed, import failed, vpad driver failed).
 
 .EXAMPLE
     pwsh -File tools\run_gameinput_selftest.ps1
 
 .EXAMPLE
     pwsh -File tools\run_gameinput_selftest.ps1 -VirtualPad -Strict
+
+.EXAMPLE
+    pwsh -File tools\run_gameinput_selftest.ps1 -Project sample\tutorial_gameinput_csharp -Godot <Godot .NET console exe>
 #>
 [CmdletBinding()]
 param(
@@ -94,11 +106,15 @@ function Stop-Run([string]$Message) {
     exit $script:ExitHarnessError
 }
 
-# Mirrors Get-GodotExecutable in tools\run_all_tests.ps1.
+# Mirrors Get-GodotExecutable in tools\run_all_tests.ps1. With -DotNet only
+# Godot .NET builds qualify, and GODOT_MONO is tried before the other variables.
 function Get-GodotExecutable {
+    param([switch]$DotNet)
     $candidates = [System.Collections.Generic.List[string]]::new()
     if (-not [string]::IsNullOrWhiteSpace($Godot)) { $candidates.Add($Godot) }
-    foreach ($envName in @('GODOT_CONSOLE', 'GODOT_BIN', 'GODOT')) {
+    $envNames = @('GODOT_CONSOLE', 'GODOT_BIN', 'GODOT')
+    if ($DotNet) { $envNames = @('GODOT_MONO') + $envNames }
+    foreach ($envName in $envNames) {
         $value = [Environment]::GetEnvironmentVariable($envName)
         if (-not [string]::IsNullOrWhiteSpace($value)) { $candidates.Add($value) }
     }
@@ -113,9 +129,24 @@ function Get-GodotExecutable {
         if ($null -ne $cmd -and -not [string]::IsNullOrWhiteSpace($cmd.Source)) { $candidates.Add($cmd.Source) }
     }
     foreach ($candidate in ($candidates | Select-Object -Unique)) {
-        if (Test-Path $candidate) { return [System.IO.Path]::GetFullPath((Resolve-Path $candidate).Path) }
+        if (-not (Test-Path $candidate)) { continue }
+        $full = [System.IO.Path]::GetFullPath((Resolve-Path $candidate).Path)
+        if ($DotNet -and -not (Test-DotNetGodot $full)) { continue }
+        return $full
     }
     return $null
+}
+
+# Godot .NET builds ship the GodotSharp assemblies in a folder beside the executable.
+function Test-DotNetGodot([string]$Path) {
+    return Test-Path (Join-Path (Split-Path -Parent $Path) 'GodotSharp')
+}
+
+# True once an import has registered the addon's GDExtension in the project.
+# A C# build alone creates .godot\mono, so .godot existing is not enough.
+function Test-ExtensionRegistered([string]$ProjectDir) {
+    $list = Join-Path $ProjectDir '.godot\extension_list.cfg'
+    return (Test-Path $list) -and ((Get-Content -Path $list -Raw) -match 'godot_gameinput\.gdextension')
 }
 
 # Runs a process with stdout/stderr going to files; returns the exit code,
@@ -168,14 +199,24 @@ function Read-VpadLog([string]$Path) {
 
 # ------------------------------------------------------------------------
 
-$godotExe = Get-GodotExecutable
-if ($null -eq $godotExe) {
-    Stop-Run 'Could not find a Godot executable. Pass -Godot or set GODOT_CONSOLE / GODOT_BIN / GODOT.'
+if ([string]::IsNullOrWhiteSpace($Project)) { $Project = Join-Path $script:RepoRoot 'sample\tutorial_gameinput' }
+$projectDir = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Project)
+if (-not (Test-Path (Join-Path $projectDir 'project.godot'))) { Stop-Run "No project.godot in $projectDir." }
+$csproj = @(Get-ChildItem -Path $projectDir -Filter '*.csproj' -File -ErrorAction SilentlyContinue)
+$isCSharp = $csproj.Count -gt 0
+if ($isCSharp -and $VirtualPad) {
+    Stop-Run 'The virtual-pad checks are in the GDScript self-test: run -VirtualPad against sample\tutorial_gameinput.'
 }
 
-if ([string]::IsNullOrWhiteSpace($Project)) { $Project = Join-Path $script:RepoRoot 'sample\tutorial_gameinput' }
-$projectDir = [System.IO.Path]::GetFullPath($Project)
-if (-not (Test-Path (Join-Path $projectDir 'project.godot'))) { Stop-Run "No project.godot in $projectDir." }
+$godotExe = Get-GodotExecutable -DotNet:$isCSharp
+if ($isCSharp -and -not [string]::IsNullOrWhiteSpace($Godot) -and (Test-Path $Godot) -and
+        -not (Test-DotNetGodot ([System.IO.Path]::GetFullPath((Resolve-Path $Godot).Path)))) {
+    Stop-Run "$Godot is not a Godot .NET build (no GodotSharp folder beside it); $($csproj[0].Name) needs one."
+}
+if ($null -eq $godotExe) {
+    if ($isCSharp) { Stop-Run 'A C# project needs a Godot .NET build. Pass -Godot or set GODOT_MONO to its console executable.' }
+    Stop-Run 'Could not find a Godot executable. Pass -Godot or set GODOT_CONSOLE / GODOT_BIN / GODOT.'
+}
 
 $binDir = Join-Path $projectDir 'addons\godot_gameinput\bin'
 $debugDll = Join-Path $binDir 'godot_gameinput.windows.debug.x86_64.dll'
@@ -196,19 +237,32 @@ $selftestLog = Join-Path $OutDir 'selftest.log'
 $vpadLog = Join-Path $OutDir 'vpad.jsonl'
 $vpadDriverLog = Join-Path $OutDir 'vpad-driver.log'
 $stopFile = Join-Path $OutDir 'vpad.stop'
-Remove-Item $reportPath, $selftestLog, $vpadLog, $vpadDriverLog, $stopFile -ErrorAction SilentlyContinue
+$buildLog = Join-Path $OutDir 'dotnet-build.log'
+Remove-Item $reportPath, $selftestLog, $vpadLog, $vpadDriverLog, $stopFile, $buildLog -ErrorAction SilentlyContinue
 
 Write-Step "Godot:   $godotExe"
-Write-Step "Project: $projectDir"
+Write-Step "Project: $projectDir$(if ($isCSharp) { ' (C#)' })"
 Write-Step "Output:  $OutDir"
 
-if (-not (Test-Path (Join-Path $projectDir '.godot'))) {
+if ($isCSharp) {
+    $dotnet = Get-Command dotnet -ErrorAction SilentlyContinue
+    if ($null -eq $dotnet) { Stop-Run 'dotnet is not on PATH; the C# project needs the .NET SDK to build.' }
+    Write-Step "Building $($csproj[0].Name)..."
+    $code = Invoke-Logged -FilePath $dotnet.Source -Arguments @('build', (ConvertTo-Arg $csproj[0].FullName), '-nologo', '-v:minimal') `
+        -LogPath $buildLog -TimeoutSeconds 600
+    if ($code -ne 0) { Stop-Run "dotnet build failed (exit $code); see $buildLog." }
+}
+
+if (-not (Test-ExtensionRegistered $projectDir)) {
     foreach ($pass in 1, 2) {
         $importLog = Join-Path $OutDir "import-$pass.log"
         $code = Invoke-Logged -FilePath $godotExe -Arguments @('--headless', '--path', (ConvertTo-Arg $projectDir), '--import') `
             -LogPath $importLog -TimeoutSeconds 600
         Write-Step "Import pass ${pass}: exit $code"
         if ($pass -eq 2 -and $code -ne 0) { Stop-Run "The project import failed (exit $code); see $importLog." }
+    }
+    if (-not (Test-ExtensionRegistered $projectDir)) {
+        Stop-Run "The import did not register addons\godot_gameinput\godot_gameinput.gdextension; see $importLog."
     }
 }
 
