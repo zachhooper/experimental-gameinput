@@ -8,7 +8,8 @@
 #   main.cpp              — lone TU defining DOCTEST_CONFIG_IMPLEMENT
 #   result_codes/         — pure HRESULT formatting helper coverage
 #   request_key/          — pure PlayFab request key-match helper coverage (Phase 2)
-#   gameinput/            — pure godot_gameinput helpers (snapshot, queues, keymap, labels)
+#   gameinput/            — pure godot_gameinput helpers (snapshot, queues, keymap, labels,
+#                           callback gates)
 #   fuzz/                 — libFuzzer fuzz targets, guarded by GDK_BUILD_FUZZ_TARGETS
 #   fuzz_harness/         — GDExtension stub harness (Phase 3), linked by fuzz targets
 #   third_party/doctest/  — vendored upstream header (do not modify)
@@ -24,7 +25,8 @@ if(GDK_BUILD_TESTS)
     set(_GDK_RC_SRC "${CMAKE_SOURCE_DIR}/addons/godot_gdk/src")
     set(_PF_RC_SRC  "${CMAKE_SOURCE_DIR}/addons/godot_playfab/src")
     # godot_gameinput's pure helpers (snapshot rules, event queues, keyboard
-    # tables, label names) have no GameInput or runtime dependency.
+    # tables, label names, callback gates) have no GameInput or runtime
+    # dependency.
     set(_GI_SRC     "${CMAKE_SOURCE_DIR}/addons/godot_gameinput/src")
 
     godot_addon_doctest_target(
@@ -37,6 +39,7 @@ if(GDK_BUILD_TESTS)
             "${CMAKE_CURRENT_SOURCE_DIR}/gameinput/test_gameinput_snapshot.cpp"
             "${CMAKE_CURRENT_SOURCE_DIR}/gameinput/test_gameinput_event_queue.cpp"
             "${CMAKE_CURRENT_SOURCE_DIR}/gameinput/test_gameinput_keymap.cpp"
+            "${CMAKE_CURRENT_SOURCE_DIR}/gameinput/test_gameinput_callback_gate.cpp"
             "${_GDK_RC_SRC}/xbox_result_codes_internal.cpp"
             "${_PF_RC_SRC}/playfab_result_codes_internal.cpp"
             "${_PF_RC_SRC}/playfab_request_key.cpp"

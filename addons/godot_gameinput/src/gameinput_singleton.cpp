@@ -1076,8 +1076,9 @@ void GameInput::_bind_methods() {
 
 // Holds an in-flight reference for the duration of a callback so shutdown()
 // can wait until the callback is out of the singleton's data before releasing
-// IGameInput or freeing the singleton. A successful UnregisterCallback already
-// makes that safe; the count keeps it safe when UnregisterCallback fails.
+// IGameInput or freeing the singleton. Each registration's gate already stops
+// calls once that registration is being removed; this fence also stops them
+// from the moment shutdown() starts.
 bool GameInput::_enter_callback() {
     m_callbacks_in_flight.fetch_add(1, std::memory_order_acquire);
     if (!m_accepting_callbacks.load(std::memory_order_acquire) ||
@@ -1093,11 +1094,26 @@ void GameInput::_leave_callback() {
 }
 
 void GameInput::_wait_for_callbacks() {
-    // After UnregisterCallback returns no NEW callback starts, so this spin
-    // is bounded by the longest in-flight callback body.
+    // Every registration's gate is closed by now, so no NEW callback enters and
+    // this spin is bounded by the longest in-flight callback body.
     while (m_callbacks_in_flight.load(std::memory_order_acquire) != 0) {
         std::this_thread::yield();
     }
+}
+
+GameInput::CallbackGate *GameInput::_open_gate() {
+    CallbackGate *gate = new CallbackGate(this);
+    gate->open();
+    return gate;
+}
+
+// For a registration GameInput refused: no token exists, so nothing calls
+// through the gate once the calls made during the Register* call have left.
+void GameInput::_discard_gate(CallbackGate *gate) {
+    if (!gate) return;
+    gate->close();
+    gate->wait_idle();
+    delete gate;
 }
 
 bool GameInput::_try_unregister(GameInputCallbackToken token) {
@@ -1112,17 +1128,28 @@ bool GameInput::_try_unregister(GameInputCallbackToken token) {
     return !m_game_input || m_game_input->UnregisterCallback(token);
 }
 
-bool GameInput::_unregister_callback(GameInputCallbackToken &token, const char *what) {
-    if (!token) return true;
-    const GameInputCallbackToken t = token;
-    token = 0;
-    // UnregisterCallback alone: calling StopCallback first makes it fail
-    // intermittently on the GameInput 3.3 runtime, and a failed unregister
-    // does not fence the callback.
-    if (_try_unregister(t)) return true;
-    // Keep the token: a registration left behind would keep calling into the
-    // singleton after shutdown() released IGameInput.
-    m_unresolved_callback_tokens.push_back(t);
+bool GameInput::_unregister_callback(Registration &reg, const char *what) {
+    if (!reg.gate) return true;
+    const Registration r = reg;
+    reg = Registration();
+    // Close first: from here on a call only reaches the gate, never the
+    // singleton. UnregisterCallback alone: calling StopCallback first makes it
+    // fail intermittently on the GameInput 3.3 runtime.
+    r.gate->close();
+    bool removed = _try_unregister(r.token);
+    if (!removed) {
+        // A call that entered before close() can make it fail; retry once
+        // every such call has left.
+        r.gate->wait_idle();
+        removed = _try_unregister(r.token);
+    }
+    r.gate->wait_idle();
+    if (removed) {
+        delete r.gate;
+        return true;
+    }
+    // GameInput may still call this registration, so its gate stays alive.
+    m_unresolved_callbacks.push_back(r);
     UtilityFunctions::push_warning("GameInput: UnregisterCallback() failed for the ", what,
                                    " callback; it will be retried and late callbacks are"
                                    " ignored.");
@@ -1130,16 +1157,47 @@ bool GameInput::_unregister_callback(GameInputCallbackToken &token, const char *
 }
 
 void GameInput::_retry_unresolved_callbacks(bool final_attempt) {
-    for (uint32_t i = m_unresolved_callback_tokens.size(); i > 0; --i) {
-        if (_try_unregister(m_unresolved_callback_tokens[i - 1])) {
-            m_unresolved_callback_tokens.remove_at_unordered(i - 1);
+    for (uint32_t i = m_unresolved_callbacks.size(); i > 0; --i) {
+        Registration &r = m_unresolved_callbacks[i - 1];
+        if (_try_unregister(r.token)) {
+            r.gate->wait_idle();
+            delete r.gate;
+            m_unresolved_callbacks.remove_at_unordered(i - 1);
         }
     }
-    if (final_attempt && !m_unresolved_callback_tokens.is_empty()) {
-        UtilityFunctions::push_warning("GameInput: ", (int64_t)m_unresolved_callback_tokens.size(),
-                                       " callback registration(s) could not be removed before"
-                                       " shutdown.");
-        m_unresolved_callback_tokens.clear();
+    if (!final_attempt || m_unresolved_callbacks.is_empty()) {
+        return;
+    }
+    UtilityFunctions::push_warning("GameInput: ", (int64_t)m_unresolved_callbacks.size(),
+                                   " callback registration(s) could not be removed before"
+                                   " shutdown; their calls are ignored for the rest of the"
+                                   " process.");
+    for (uint32_t i = 0; i < m_unresolved_callbacks.size(); ++i) {
+        _abandon_callback(m_unresolved_callbacks[i]);
+    }
+    m_unresolved_callbacks.clear();
+}
+
+// GameInput may call a registration it would not remove at any later time,
+// and the GDK says nothing the callback uses may be freed until
+// UnregisterCallback() succeeds, including the DLL that hosts the callback.
+// So the closed gate is never deleted and this module is pinned: a late call
+// runs mapped code, finds its gate closed and returns.
+void GameInput::_abandon_callback(Registration &reg) {
+    reg = Registration(); // the gate is leaked on purpose
+    m_abandoned_callbacks++;
+    if (m_module_pinned) {
+        return;
+    }
+    HMODULE module = nullptr;
+    m_module_pinned = GetModuleHandleExW(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
+            reinterpret_cast<LPCWSTR>(&GameInput::_on_device_callback), &module) != FALSE;
+    if (!m_module_pinned) {
+        UtilityFunctions::push_warning("GameInput: could not pin the addon module (error ",
+                                       (int64_t)GetLastError(),
+                                       "); unloading it while GameInput can still call it is"
+                                       " unsafe.");
     }
 }
 
@@ -1256,7 +1314,8 @@ void CALLBACK GameInput::_on_device_callback(
         IGameInputDevice *device, uint64_t timestamp,
         GameInputDeviceStatus current_status,
         GameInputDeviceStatus previous_status) {
-    auto *self = static_cast<GameInput *>(context);
+    CallbackGate::Scope gate(context);
+    GameInput *self = gate.owner();
     if (!self || !device) {
         return;
     }
@@ -1278,18 +1337,19 @@ void CALLBACK GameInput::_on_device_callback(
     self->_leave_callback();
 }
 
-void CALLBACK GameInput::_on_reading_callback(GameInputCallbackToken token, void *context,
+void CALLBACK GameInput::_on_reading_callback(GameInputCallbackToken /*token*/, void *context,
                                               IGameInputReading *reading) {
-    auto *self = static_cast<GameInput *>(context);
+    // The gate is this registration's own, so a late call from an earlier
+    // reading registration is turned away here.
+    CallbackGate::Scope gate(context);
+    GameInput *self = gate.owner();
     if (!self || !reading) {
         return;
     }
     if (!self->_enter_callback()) {
         return;
     }
-    const uint64_t active = self->m_active_reading_token.load(std::memory_order_acquire);
-    if (self->m_accepting_readings.load(std::memory_order_acquire) &&
-            (active == 0 || active == (uint64_t)token)) {
+    if (self->m_accepting_readings.load(std::memory_order_acquire)) {
         IGameInputDevice *device = nullptr;
         reading->GetDevice(&device); // AddRef'd by GameInput
         if (device) {
@@ -1309,7 +1369,8 @@ void CALLBACK GameInput::_on_system_button_callback(GameInputCallbackToken /*tok
                                                     uint64_t timestamp,
                                                     GameInputSystemButtons current_buttons,
                                                     GameInputSystemButtons previous_buttons) {
-    auto *self = static_cast<GameInput *>(context);
+    CallbackGate::Scope gate(context);
+    GameInput *self = gate.owner();
     if (!self || !device) {
         return;
     }
@@ -1333,7 +1394,8 @@ void CALLBACK GameInput::_on_keyboard_layout_callback(GameInputCallbackToken /*t
                                                       void *context, IGameInputDevice *device,
                                                       uint64_t timestamp, uint32_t current_layout,
                                                       uint32_t previous_layout) {
-    auto *self = static_cast<GameInput *>(context);
+    CallbackGate::Scope gate(context);
+    GameInput *self = gate.owner();
     if (!self || !device) {
         return;
     }
@@ -1531,11 +1593,11 @@ void GameInput::_load_settings() {
 bool GameInput::_apply_reading_callback_registration() {
     const bool had_live = m_accepting_readings.load(std::memory_order_acquire);
     m_accepting_readings.store(false, std::memory_order_release);
-    m_active_reading_token.store(0, std::memory_order_release);
     _retry_unresolved_callbacks(false);
-    _unregister_callback(m_reading_callback_token, "reading");
+    _unregister_callback(m_reading_callback, "reading");
     _wait_for_callbacks();
     if (had_live) {
+        _discard_buffered_readings();
         // Readings between the old and the new registration are not seen.
         for (int i = 0; i < m_devices.size(); ++i) {
             m_devices.write[i].event_gap_pending = true;
@@ -1549,10 +1611,10 @@ bool GameInput::_apply_reading_callback_registration() {
     _ensure_reading_rings();
 
     if (m_backend == Backend::Mock) {
-        // A stand-in token so the unregister path also runs under the mock.
-        m_reading_callback_token = (GameInputCallbackToken)++m_mock_callback_token_seq;
-        m_active_reading_token.store((uint64_t)m_reading_callback_token,
-                                     std::memory_order_release);
+        // A stand-in registration so the unregister path also runs under the
+        // mock.
+        m_reading_callback.token = (GameInputCallbackToken)++m_mock_callback_token_seq;
+        m_reading_callback.gate = _open_gate();
         m_accepting_readings.store(true, std::memory_order_release);
         return true;
     }
@@ -1560,21 +1622,50 @@ bool GameInput::_apply_reading_callback_registration() {
         return false;
     }
 
+    CallbackGate *gate = _open_gate();
     m_accepting_readings.store(true, std::memory_order_release);
     GameInputCallbackToken token = 0;
     HRESULT hr = m_game_input->RegisterReadingCallback(
-        nullptr, (GameInputKind)native_kinds_from_snap(m_reading_snap_kinds), this,
+        nullptr, (GameInputKind)native_kinds_from_snap(m_reading_snap_kinds), gate,
         &GameInput::_on_reading_callback, &token);
     if (FAILED(hr)) {
         m_accepting_readings.store(false, std::memory_order_release);
+        _discard_gate(gate);
         UtilityFunctions::push_warning("GameInput: RegisterReadingCallback failed (hr=",
                                        hresult_to_string(hr),
                                        "); reading_received will not fire.");
         return false;
     }
-    m_reading_callback_token = token;
-    m_active_reading_token.store((uint64_t)token, std::memory_order_release);
+    m_reading_callback.token = token;
+    m_reading_callback.gate = gate;
     return true;
+}
+
+// The reading registration changed: readings queued under the old one are
+// released undelivered, including those a drain in progress still holds, and
+// get_buffered_readings() is empty until the next poll.
+void GameInput::_discard_buffered_readings() {
+    m_reading_epoch++;
+    {
+        std::lock_guard<std::mutex> lock(m_event_mutex);
+        if (m_reading_ring) {
+            for (uint32_t i = 0; i < m_reading_ring->size(); ++i) {
+                _release_reading_event(m_reading_ring->at(i));
+            }
+            m_reading_ring->clear();
+        }
+        _release_gap_marks_locked();
+    }
+    for (int i = 0; i < m_devices.size(); ++i) {
+        m_devices.write[i].frame_readings = Array();
+    }
+}
+
+void GameInput::_release_reading_event(ReadingEvent &ev) {
+    if (ev.native_device) {
+        ev.native_device->Release();
+        ev.native_device = nullptr;
+    }
 }
 
 // --- Main-thread drain -------------------------------------------------------
@@ -1610,6 +1701,7 @@ void GameInput::_drain_callback_events() {
     }
 
     const uint64_t gen = m_generation;
+    const uint64_t epoch = m_reading_epoch;
     const uint32_t reading_count = readings ? readings->size() : 0;
     ReadingRing *ring = readings.get();
     gi::MergeCursor cursor = gi::merge_by_sequence(
@@ -1620,6 +1712,12 @@ void GameInput::_drain_callback_events() {
             return m_initialized && m_generation == gen;
         },
         [&](uint32_t i) {
+            if (m_reading_epoch != epoch) {
+                // A handler changed the reading registration; this reading
+                // belongs to the old one. Device events keep draining.
+                _release_reading_event(ring->at(i));
+                return true;
+            }
             _handle_reading_event(ring->at(i));
             return m_initialized && m_generation == gen;
         });
@@ -1870,47 +1968,60 @@ bool GameInput::initialize() {
     m_game_input->SetFocusPolicy((GameInputFocusPolicy)m_focus_policy);
 
     m_accepting_callbacks.store(true, std::memory_order_release);
+    CallbackGate *device_gate = _open_gate();
+    GameInputCallbackToken device_token = 0;
     hr = m_game_input->RegisterDeviceCallback(
         nullptr,
         (GameInputKind)kNativeReadableKinds,
         GameInputDeviceAnyStatus,
         GameInputBlockingEnumeration,
-        this,
+        device_gate,
         &GameInput::_on_device_callback,
-        &m_device_callback_token);
+        &device_token);
     if (FAILED(hr)) {
         m_accepting_callbacks.store(false, std::memory_order_release);
         UtilityFunctions::push_warning(
             "GameInput: RegisterDeviceCallback failed (hr=", (int64_t)hr, ")");
+        _discard_gate(device_gate);
         _wait_for_callbacks();
         _clear_pending_events();
         m_game_input->Release();
         m_game_input = nullptr;
-        m_device_callback_token = 0;
         m_backend = Backend::None;
         return false;
     }
+    m_device_callback.token = device_token;
+    m_device_callback.gate = device_gate;
 
     // Optional callbacks. Hosts without the corresponding feature report
     // E_NOTIMPL; the rest of the runtime works without them.
+    CallbackGate *system_gate = _open_gate();
+    GameInputCallbackToken system_token = 0;
     hr = m_game_input->RegisterSystemButtonCallback(
         nullptr,
         (GameInputSystemButtons)(GameInputSystemButtonGuide | GameInputSystemButtonShare),
-        this, &GameInput::_on_system_button_callback, &m_system_button_callback_token);
+        system_gate, &GameInput::_on_system_button_callback, &system_token);
     if (FAILED(hr)) {
-        m_system_button_callback_token = 0;
+        _discard_gate(system_gate);
         UtilityFunctions::print_verbose("GameInput: RegisterSystemButtonCallback unavailable (hr=",
                                         hresult_to_string(hr),
                                         "); system_buttons_changed will not fire.");
+    } else {
+        m_system_button_callback.token = system_token;
+        m_system_button_callback.gate = system_gate;
     }
+    CallbackGate *layout_gate = _open_gate();
+    GameInputCallbackToken layout_token = 0;
     hr = m_game_input->RegisterKeyboardLayoutCallback(
-        nullptr, this, &GameInput::_on_keyboard_layout_callback,
-        &m_keyboard_layout_callback_token);
+        nullptr, layout_gate, &GameInput::_on_keyboard_layout_callback, &layout_token);
     if (FAILED(hr)) {
-        m_keyboard_layout_callback_token = 0;
+        _discard_gate(layout_gate);
         UtilityFunctions::print_verbose(
             "GameInput: RegisterKeyboardLayoutCallback unavailable (hr=", hresult_to_string(hr),
             "); keyboard_layout_changed will not fire.");
+    } else {
+        m_keyboard_layout_callback.token = layout_token;
+        m_keyboard_layout_callback.gate = layout_gate;
     }
 
     m_initialized = true;
@@ -1928,16 +2039,16 @@ void GameInput::shutdown() {
     //    before touching singleton state.
     m_accepting_readings.store(false, std::memory_order_release);
     m_accepting_callbacks.store(false, std::memory_order_release);
-    m_active_reading_token.store(0, std::memory_order_release);
     m_shutting_down.store(true, std::memory_order_release);
 
     // 2. Unregister. GameInput v3 dropped the timeout parameter that v1
-    //    accepted here; m_callbacks_in_flight below also covers an unregister
-    //    that fails.
-    _unregister_callback(m_reading_callback_token, "reading");
-    _unregister_callback(m_system_button_callback_token, "system button");
-    _unregister_callback(m_keyboard_layout_callback_token, "keyboard layout");
-    _unregister_callback(m_device_callback_token, "device");
+    //    accepted here. Each gate closes before its unregister, so a
+    //    registration GameInput will not remove only ever reaches its own
+    //    closed gate; see _abandon_callback().
+    _unregister_callback(m_reading_callback, "reading");
+    _unregister_callback(m_system_button_callback, "system button");
+    _unregister_callback(m_keyboard_layout_callback, "keyboard layout");
+    _unregister_callback(m_device_callback, "device");
     _retry_unresolved_callbacks(true);
 
     // 3. Wait for any callback currently inside the body to exit.
@@ -2021,6 +2132,14 @@ bool GameInput::is_initialized() const {
 }
 
 void GameInput::poll() {
+    // A handler of a signal that poll() is emitting cannot start another
+    // poll(). The drain hands its gap marks and reading ring to members that
+    // one drain at a time may use, and shutdown() resets the frame guard, so
+    // a handler that restarts the runtime and polls would otherwise run a
+    // second drain over the first one's state.
+    if (m_in_poll) {
+        return;
+    }
     if (!m_initialized || (!m_game_input && m_backend != Backend::Mock)) {
         return;
     }
@@ -2030,6 +2149,11 @@ void GameInput::poll() {
         return; // already polled this frame
     }
     m_last_polled_frame = frame;
+    m_in_poll = true;
+    struct InPoll {
+        bool &flag;
+        ~InPoll() { flag = false; }
+    } in_poll{ m_in_poll };
 
     // Callback events first (connects, status, readings, in arrival order),
     // then the per-frame refresh, so a device that connected this frame
@@ -3384,7 +3508,9 @@ void GameInput::_test_fail_next_unregisters(int count) {
 
 Dictionary GameInput::_test_get_unregister_state() const {
     Dictionary d;
-    d["unresolved"] = (int64_t)m_unresolved_callback_tokens.size();
+    d["unresolved"] = (int64_t)m_unresolved_callbacks.size();
+    d["abandoned"] = (int64_t)m_abandoned_callbacks;
+    d["module_pinned"] = m_module_pinned;
     d["failures_left"] = (int64_t)m_test_unregister_failures;
     d["attempts"] = (int64_t)m_test_unregister_attempts;
     return d;

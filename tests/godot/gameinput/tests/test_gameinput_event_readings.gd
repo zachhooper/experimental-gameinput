@@ -290,7 +290,7 @@ func test_more_devices_losing_readings_than_marks_flags_every_quiet_device() -> 
 	assert_eq(flagged, 17, "past the mark table, every device without a kept reading is flagged")
 
 
-func test_a_failed_unregister_is_retried_on_the_next_change() -> void:
+func test_a_failed_unregister_is_retried_once_the_gate_is_idle() -> void:
 	var pad = _start(_k("DEVICE_GAMEPAD"))
 	if pad == null:
 		return
@@ -298,16 +298,29 @@ func test_a_failed_unregister_is_retried_on_the_next_change() -> void:
 	_gi._test_fail_next_unregisters(1)
 	assert_true(_gi.set_reading_callback_kinds(_k("DEVICE_GAMEPAD") | _k("DEVICE_MOUSE")),
 			"re-registration succeeds")
+	var after: Dictionary = _gi._test_get_unregister_state()
+	assert_eq(after["attempts"] - before["attempts"], 2, "the failed attempt and one retry")
+	assert_eq(after["unresolved"], 0, "the retry removed the registration")
+
+
+func test_a_failed_unregister_is_retried_on_the_next_change() -> void:
+	var pad = _start(_k("DEVICE_GAMEPAD"))
+	if pad == null:
+		return
+	var before: Dictionary = _gi._test_get_unregister_state()
+	_gi._test_fail_next_unregisters(2)
+	assert_true(_gi.set_reading_callback_kinds(_k("DEVICE_GAMEPAD") | _k("DEVICE_MOUSE")),
+			"re-registration succeeds")
 	var failed: Dictionary = _gi._test_get_unregister_state()
-	assert_eq(failed["attempts"] - before["attempts"], 1, "one unregister attempt")
-	assert_eq(failed["unresolved"], 1, "the failed token is kept, not forgotten")
+	assert_eq(failed["attempts"] - before["attempts"], 2, "the attempt and its retry")
+	assert_eq(failed["unresolved"], 1, "the failed registration is kept, not forgotten")
 	_push(pad, {"gamepad": {"buttons": 0}})
 	_gi._test_force_poll()
 	assert_eq(_readings().size(), 1, "the new registration still delivers")
 	assert_true(_gi.set_reading_callback_kinds(_k("DEVICE_GAMEPAD")), "changed again")
 	var retried: Dictionary = _gi._test_get_unregister_state()
-	assert_eq(retried["attempts"] - failed["attempts"], 2, "the kept token and the current one")
-	assert_eq(retried["unresolved"], 0, "the kept token is removed on the next change")
+	assert_eq(retried["attempts"] - failed["attempts"], 2, "the kept registration and the current one")
+	assert_eq(retried["unresolved"], 0, "the kept registration is removed on the next change")
 
 
 func test_shutdown_retries_a_failed_unregister() -> void:
@@ -315,25 +328,84 @@ func test_shutdown_retries_a_failed_unregister() -> void:
 	if pad == null:
 		return
 	var before: Dictionary = _gi._test_get_unregister_state()
-	_gi._test_fail_next_unregisters(1)
+	_gi._test_fail_next_unregisters(2)
 	_gi.shutdown()
 	var after: Dictionary = _gi._test_get_unregister_state()
-	assert_eq(after["attempts"] - before["attempts"], 2, "shutdown tries once more")
-	assert_eq(after["unresolved"], 0, "the retry removed the registration")
-	assert_eq(after["failures_left"], 0, "both the failure and the retry ran")
+	assert_eq(after["attempts"] - before["attempts"], 3,
+			"the attempt, its retry and the final attempt at shutdown")
+	assert_eq(after["unresolved"], 0, "the final attempt removed the registration")
+	assert_eq(after["abandoned"], before["abandoned"], "nothing was abandoned")
+	assert_eq(after["failures_left"], 0, "every injected failure ran")
 
 
-func test_shutdown_gives_up_after_its_final_attempt() -> void:
+func test_shutdown_abandons_a_registration_it_cannot_remove() -> void:
 	var pad = _start(_k("DEVICE_GAMEPAD"))
 	if pad == null:
 		return
 	var before: Dictionary = _gi._test_get_unregister_state()
-	_gi._test_fail_next_unregisters(2)
+	_gi._test_fail_next_unregisters(3)
 	_gi.shutdown()
 	var after: Dictionary = _gi._test_get_unregister_state()
-	assert_eq(after["attempts"] - before["attempts"], 2, "one retry, no more")
+	assert_eq(after["attempts"] - before["attempts"], 3, "one final attempt, no more")
 	assert_eq(after["unresolved"], 0, "nothing is kept past the IGameInput that issued it")
+	assert_eq(after["abandoned"] - before["abandoned"], 1,
+			"the registration is abandoned and its gate is never freed")
+	assert_true(after["module_pinned"], "the module is pinned so a late call finds mapped code")
+	_log.stop()
+	pad = _start(_k("DEVICE_GAMEPAD"))
+	_push(pad, {"gamepad": {"buttons": 0}})
+	_gi._test_force_poll()
+	assert_eq(_readings().size(), 1, "a new session registers through a new gate")
 
+
+func test_a_registration_change_discards_undelivered_readings() -> void:
+	var pad = _start(_k("DEVICE_GAMEPAD"))
+	if pad == null:
+		return
+	_push(pad, {"gamepad": {"buttons": _d("BUTTON_A")}})
+	_push(pad, {"gamepad": {"buttons": 0}})
+	assert_true(_gi.set_reading_callback_kinds(_k("DEVICE_GAMEPAD") | _k("DEVICE_MOUSE")),
+			"re-registration succeeds")
+	_gi._test_force_poll()
+	assert_eq(_readings().size(), 0, "readings queued under the old registration are discarded")
+	assert_eq(_gi.get_dropped_reading_count(), 0, "a discard is not an overflow drop")
+	_push(pad, {"gamepad": {"buttons": _d("BUTTON_B")}})
+	_gi._test_force_poll()
+	var readings := _readings()
+	assert_eq(readings.size(), 1, "the new registration delivers")
+	assert_true(readings[0].has_gap_before(), "the discard is reported as a gap")
+	assert_true(_gi.get_current_reading(pad).is_button_down(_d("BUTTON_B")),
+			"the polled state is unaffected")
+
+
+func test_turning_callbacks_off_empties_the_buffered_readings() -> void:
+	var pad = _start(_k("DEVICE_GAMEPAD"))
+	if pad == null:
+		return
+	_push(pad, {"gamepad": {"buttons": 0}})
+	_gi._test_force_poll()
+	assert_eq(_gi.get_buffered_readings(pad).size(), 1, "one reading buffered")
+	assert_true(_gi.set_reading_callback_kinds(0), "callbacks off")
+	assert_eq(_gi.get_buffered_readings(pad), [], "nothing is buffered once callbacks are off")
+
+
+func test_a_handler_that_changes_the_registration_stops_old_readings() -> void:
+	var pad = _start(_k("DEVICE_GAMEPAD"))
+	if pad == null:
+		return
+	var id: int = pad.get_device_id()
+	for i in 3:
+		_push(pad, {"gamepad": {"buttons": 0}})
+	_gi._test_set_device_status(id, _d("STATUS_CONNECTED") | _d("STATUS_HAPTIC_INFO_READY"))
+	var gi = _gi
+	var turn_off_once := func(_device, _reading): gi.set_reading_callback_kinds(0)
+	gi.reading_received.connect(turn_off_once, CONNECT_ONE_SHOT)
+	gi._test_force_poll()
+	assert_eq(_log.named("reading_received").size(), 1,
+			"no reading from the old registration is delivered after the change")
+	assert_eq(_log.named("device_status_changed").size(), 1, "device events still drain")
+	assert_eq(gi.get_buffered_readings(pad), [], "nothing buffered once callbacks are off")
+	assert_true(gi.is_initialized(), "the runtime keeps running")
 
 func test_readings_and_device_events_share_one_order() -> void:
 	var pad = _start(_k("DEVICE_GAMEPAD"))
@@ -363,3 +435,32 @@ func test_handler_shutdown_stops_the_drain() -> void:
 	assert_eq(_log.named("reading_received").size(), 1,
 			"no reading is delivered after a handler shuts the runtime down")
 	assert_false(gi.is_initialized(), "runtime is shut down")
+
+
+func test_a_handler_that_restarts_the_runtime_cannot_nest_a_poll() -> void:
+	var pad = _start(_k("DEVICE_GAMEPAD"))
+	if pad == null:
+		return
+	for i in 3:
+		_push(pad, {"gamepad": {"buttons": 0}})
+	var gi = _gi
+	var nested := {"connected": 0}
+	var count_connect := func(_device): nested["connected"] += 1
+	var restart_once := func(_device, _reading):
+		gi.shutdown()
+		gi._test_initialize_mock()
+		gi.set_reading_callback_kinds(_k("DEVICE_GAMEPAD"))
+		gi._test_inject_device({})
+		gi.device_connected.connect(count_connect)
+		gi._test_force_poll()
+		gi.device_connected.disconnect(count_connect)
+	gi.reading_received.connect(restart_once, CONNECT_ONE_SHOT)
+	gi._test_force_poll()
+	assert_eq(nested["connected"], 0, "a poll() from a handler of the drain does nothing")
+	assert_eq(_log.named("reading_received").size(), 1,
+			"the old session's readings stop at the restart")
+	assert_true(gi.is_initialized(), "the restarted runtime is running")
+	gi._test_force_poll()
+	assert_eq(_log.named("device_connected").size(), 1,
+			"the next poll drains the new session's connect")
+	assert_eq(gi.get_devices(_k("DEVICE_ANY")).size(), 1, "the new session has its device")

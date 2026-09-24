@@ -246,6 +246,12 @@ game polls too rarely the oldest readings are dropped:
 that lost readings reports `has_gap_before()`. If more than 16 devices lose
 readings between two polls, every device's next reading reports the gap.
 
+Changing the mask, or turning callbacks off, discards readings that were
+queued but not delivered yet, so no reading of an old registration arrives
+after the change. That holds inside a `reading_received` handler as well:
+the rest of that poll's readings are not emitted, while device events still
+are. The next reading of every device reports `has_gap_before()`.
+
 ## Vibration and haptics
 
 `GameInputDevice.start_vibration()` follows `Input.start_joy_vibration()`:
@@ -473,7 +479,13 @@ preferred for clarity.
   callback has finished. If `UnregisterCallback` fails, the addon keeps the
   registration and tries again at the next reading-callback change and once
   more at shutdown, before it releases `IGameInput`. Late callbacks from it
-  are ignored meanwhile.
+  are ignored meanwhile. A registration GameInput still refuses to remove at
+  shutdown is abandoned with a warning: its calls do nothing for the rest of
+  the process, and the addon's DLL is pinned in memory so that GameInput never
+  calls into unloaded code.
+* `poll()` does not nest. Calling it from a handler of a signal that `poll()`
+  is emitting does nothing, even if the handler restarted the runtime; the
+  next `poll()` delivers whatever the handler queued.
 * When the engine quits, the addon shuts the runtime down and disconnects
   every connection to its signals before the script languages are torn down,
   so a lambda that is still connected cannot crash the process on exit.

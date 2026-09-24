@@ -26,6 +26,7 @@
 // the v3 namespace into the global scope so the addon source compiles unchanged.
 using namespace ::GameInput::v3;
 
+#include "gameinput_callback_gate.h"
 #include "gameinput_event_queue.h"
 #include "gameinput_snapshot.h"
 
@@ -100,13 +101,21 @@ private:
 
     IGameInput *m_game_input = nullptr;
     Backend m_backend = Backend::None;
-    GameInputCallbackToken m_device_callback_token = 0;
-    GameInputCallbackToken m_reading_callback_token = 0;
-    GameInputCallbackToken m_system_button_callback_token = 0;
-    GameInputCallbackToken m_keyboard_layout_callback_token = 0;
-    // Token of the live reading registration; callbacks carrying any other
-    // token (a late call from an earlier registration) are ignored.
-    std::atomic<uint64_t> m_active_reading_token{0};
+
+    // One callback registration. Its gate, not `this`, is the context handed
+    // to GameInput, so a late call from a registration that could not be
+    // removed only ever reaches its own closed gate. A new gate per
+    // registration also turns away late calls from an earlier registration
+    // of the same callback.
+    using CallbackGate = gameinput_internal::CallbackGate<GameInput>;
+    struct Registration {
+        GameInputCallbackToken token = 0;
+        CallbackGate *gate = nullptr;
+    };
+    Registration m_device_callback;
+    Registration m_reading_callback;
+    Registration m_system_button_callback;
+    Registration m_keyboard_layout_callback;
     std::atomic_bool m_accepting_callbacks{false};
     std::atomic_bool m_accepting_readings{false};
     bool m_initialized = false;
@@ -125,6 +134,11 @@ private:
     // Snapshot kinds captured by the reading callback. Written only while no
     // reading registration is live.
     uint32_t m_reading_snap_kinds = 0;
+    // Bumped whenever the reading registration changes. A drain compares it
+    // before each reading, so readings of the old registration that a
+    // reading_received handler's set_reading_callback_kinds() call left in
+    // the drain are discarded instead of delivered. Main thread only.
+    uint64_t m_reading_epoch = 0;
 
     // Requested configuration. Kept across shutdown()/initialize(); the
     // project settings apply at initialize() unless a setter overrode them.
@@ -172,14 +186,21 @@ private:
     GapMark m_gap_marks[kMaxGapMarks];       // guarded by m_event_mutex
     uint32_t m_gap_mark_count = 0;           // guarded by m_event_mutex
     bool m_gap_marks_overflowed = false;     // guarded by m_event_mutex
-    GapMark m_drain_gap_marks[kMaxGapMarks]; // main thread, one drain at a time
+    GapMark m_drain_gap_marks[kMaxGapMarks]; // main thread; poll() does not nest
     uint32_t m_drain_gap_mark_count = 0;
     bool m_drain_gap_all = false;
+    // True while poll() runs. Never reset by shutdown(), so a signal handler
+    // that restarts the runtime still cannot nest a poll(). Main thread only.
+    bool m_in_poll = false;
 
-    // Tokens whose UnregisterCallback() failed. Retried at the next reading
-    // registration change and at shutdown(), while the IGameInput that
-    // issued them is still alive. Main thread only.
-    LocalVector<GameInputCallbackToken> m_unresolved_callback_tokens;
+    // Registrations whose UnregisterCallback() failed, gates closed. Retried at
+    // the next reading registration change and at shutdown(), while the
+    // IGameInput that issued them is still alive. Main thread only.
+    LocalVector<Registration> m_unresolved_callbacks;
+    // Registrations shutdown() could not remove. Their gates are never freed
+    // and the module is pinned so a late call always lands in mapped code.
+    uint32_t m_abandoned_callbacks = 0;
+    bool m_module_pinned = false;
     uint64_t m_mock_callback_token_seq = 0;
 
     // --- Main-thread device cache ------------------------------------------
@@ -260,9 +281,14 @@ private:
     void _clear_pending_events();
     void _ensure_reading_rings();
     bool _apply_reading_callback_registration();
+    void _discard_buffered_readings();
+    void _release_reading_event(ReadingEvent &ev);
+    CallbackGate *_open_gate();
+    void _discard_gate(CallbackGate *gate);
     bool _try_unregister(GameInputCallbackToken token);
-    bool _unregister_callback(GameInputCallbackToken &token, const char *what);
+    bool _unregister_callback(Registration &reg, const char *what);
     void _retry_unresolved_callbacks(bool final_attempt);
+    void _abandon_callback(Registration &reg);
     void _wait_for_callbacks();
     bool _mark_gap_locked(const ReadingEvent &evicted);
     void _release_gap_marks_locked();

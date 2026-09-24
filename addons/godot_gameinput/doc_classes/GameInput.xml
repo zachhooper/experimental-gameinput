@@ -26,6 +26,7 @@
 			<return type="void" />
 			<description>
 				Unregisters every GameInput callback and waits for callbacks already running on worker threads to return, releases every [GameInputForceFeedbackEffect], stops rumble on every connected device, releases the devices and the [code]IGameInput[/code] runtime, and clears the device cache and event queues. [signal device_disconnected] is not emitted for devices released this way; wrappers handed out earlier report [method GameInputDevice.is_connected] as [code]false[/code]. Safe to call when not initialized. After this returns, all other methods soft-fail again.
+				If GameInput refuses to remove a callback registration even here, the registration is abandoned with a warning: for the rest of the process its calls return without doing anything, and the addon's library stays loaded so that those calls remain safe.
 			</description>
 		</method>
 		<method name="is_initialized" qualifiers="const">
@@ -39,6 +40,7 @@
 			<description>
 				Drains the queued GameInput events on the main thread and refreshes the cached state of every connected device. The queued events — [signal device_connected], [signal device_disconnected], [signal device_status_changed], [signal system_buttons_changed], [signal keyboard_layout_changed] and, when reading callbacks are enabled, [signal reading_received] — are emitted in the order they happened. Each device's state is then refreshed with [code]GetCurrentReading()[/code], once for each input kind the device supports, and the state it replaces becomes the previous state used for press and release edges. Vibrations started with a duration by [method GameInputDevice.start_vibration] are stopped here once the duration has elapsed.
 				This is per-frame idempotent: multiple [GameInputMapper] nodes calling [method poll] defensively in the same frame cause only one real refresh, keyed on [code]Engine.get_process_frames()[/code].
+				Calls do not nest: [method poll] called from a handler of a signal that [method poll] is emitting does nothing, even when the handler restarted the runtime with [method shutdown] and [method initialize]. The next [method poll] delivers whatever the handler queued.
 			</description>
 		</method>
 		<method name="get_devices">
@@ -107,6 +109,7 @@
 			<description>
 				Selects the device kinds, as [enum DeviceKind] flags, whose every reading is delivered through [signal reading_received] and [method get_buffered_readings] instead of only the latest state per [method poll]. [code]0[/code], the default, turns reading callbacks off. Bits outside [constant DEVICE_ANY] are ignored with a warning.
 				A GameInput worker thread queues the readings in a ring of 512 entries shared by every device. If the game polls too rarely to keep up, the oldest readings are dropped and counted by [method get_dropped_reading_count], and the next reading of each device that lost readings reports [method GameInputReading.has_gap_before].
+				Changing the mask, including turning callbacks off, discards readings that are queued but not yet delivered. This also applies inside a [signal reading_received] handler: the remaining readings of that [method poll] are not emitted, although device events still are. [method get_buffered_readings] is empty until the next poll, and the next reading of every device reports [method GameInputReading.has_gap_before]. Setting the current mask again changes nothing.
 				Called before [method initialize], the mask is stored, applied when the runtime starts, and takes precedence over the Project Setting [code]game_input/runtime/reading_callback_kinds[/code]. Returns [code]false[/code] only when [code]RegisterReadingCallback()[/code] failed, in which case [signal reading_received] will not fire.
 			</description>
 		</method>
@@ -120,7 +123,7 @@
 			<return type="Array" />
 			<param index="0" name="device" type="GameInputDevice" />
 			<description>
-				Returns the [GameInputReading] objects the reading callback delivered for [param device] during the last [method poll], oldest first and in the same order as [signal reading_received]. Use it to handle every sample of fast input, such as two taps inside one frame, without connecting to the signal. The array is replaced on every poll, and it is empty when reading callbacks are off for the device's kinds. Returns an empty [Array] when [param device] is null or disconnected, or the runtime is not initialized.
+				Returns the [GameInputReading] objects the reading callback delivered for [param device] during the last [method poll], oldest first and in the same order as [signal reading_received]. Use it to handle every sample of fast input, such as two taps inside one frame, without connecting to the signal. The array is replaced on every poll. It is empty when reading callbacks are off for the device's kinds, and after [method set_reading_callback_kinds] changed the mask since the last poll. Returns an empty [Array] when [param device] is null or disconnected, or the runtime is not initialized.
 			</description>
 		</method>
 		<method name="get_dropped_reading_count" qualifiers="const">
